@@ -531,7 +531,9 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
   let weightCell;
   if (timeBased) {
     const dur = set.actualDuration || set.targetDuration || 0;
-    weightCell = `<span class="set-weight">${dur} min</span>`;
+    const isRunning = activeDurationTimer?.setId === set.id;
+    const durLabel = isRunning ? 'Running...' : (set.completed ? `${dur} min` : `${dur} min`);
+    weightCell = `<span class="set-weight${isRunning ? ' text-primary' : ''}">${durLabel}</span>`;
   } else {
     weightCell = `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
   }
@@ -572,6 +574,8 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
   ${strip}`;
 }
 
+let activeDurationTimer = null; // { setId, interval, startTime, totalSec }
+
 async function toggleSet(setId) {
   // Find the set
   for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
@@ -579,6 +583,36 @@ async function toggleSet(setId) {
     if (!set) continue;
 
     const exercise = (await DB.getExerciseMap())[exId];
+
+    // Time-based exercises: tap starts/stops a countdown timer
+    if (isTimeBased(exercise) && !set.isWarmup) {
+      if (set.completed) {
+        // Uncheck — cancel completion
+        set.completed = false;
+        set.actualReps = 0;
+        set.timestamp = null;
+        await DB.put('sets', set);
+        renderView('workout');
+      } else if (activeDurationTimer?.setId === setId) {
+        // Timer running for this set — tap again to finish early
+        clearInterval(activeDurationTimer.interval);
+        const elapsedSec = Math.floor((Date.now() - activeDurationTimer.startTime) / 1000);
+        set.actualDuration = Math.round(elapsedSec / 60 * 10) / 10; // round to 0.1 min
+        activeDurationTimer = null;
+        set.completed = true;
+        set.timestamp = new Date().toISOString();
+        if (navigator.vibrate) navigator.vibrate(10);
+        await DB.put('sets', set);
+        renderView('workout');
+      } else {
+        // Start countdown timer
+        const durationSec = (set.targetDuration || 30) * 60;
+        const startTime = Date.now();
+        activeDurationTimer = { setId, startTime, totalSec: durationSec };
+        showDurationTimer(durationSec, exercise.name, set);
+      }
+      break;
+    }
 
     if (set.completed) {
       // Uncheck -- mark incomplete
@@ -620,6 +654,55 @@ async function toggleSet(setId) {
     renderView('workout');
     break;
   }
+}
+
+function showDurationTimer(totalSec, exerciseName, set) {
+  const overlay = document.getElementById('timer-overlay');
+  overlay.classList.remove('hidden');
+  overlay.dataset.mode = 'duration';
+
+  const modeLabel = document.getElementById('timer-mode-label');
+  if (modeLabel) modeLabel.textContent = 'DURATION';
+
+  const pauseBtn = document.getElementById('timer-pause-btn');
+  if (pauseBtn) pauseBtn.textContent = 'PAUSE';
+
+  const circumference = 2 * Math.PI * 100;
+  const ring = document.getElementById('timer-ring-progress');
+  ring.style.strokeDasharray = circumference;
+  ring.style.stroke = '#3b82f6'; // blue for duration
+
+  const timeDisplay = document.getElementById('timer-time');
+  const labelDisplay = document.getElementById('timer-exercise-label');
+  labelDisplay.textContent = exerciseName;
+
+  timeDisplay.textContent = formatTime(totalSec);
+  ring.style.strokeDashoffset = 0;
+
+  // Use the rest timer for the countdown
+  restTimer.onTick = (remaining, total) => {
+    timeDisplay.textContent = formatTime(remaining);
+    const pct = remaining / total;
+    ring.style.strokeDashoffset = circumference * (1 - pct);
+  };
+
+  restTimer.onDone = async () => {
+    overlay.classList.add('hidden');
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+    // Auto-complete the set
+    if (activeDurationTimer) {
+      set.completed = true;
+      set.actualDuration = set.targetDuration;
+      set.timestamp = new Date().toISOString();
+      activeDurationTimer = null;
+      await DB.put('sets', set);
+      showToast(`${exerciseName} complete!`, 'success');
+      renderView('workout');
+    }
+  };
+
+  restTimer.start(totalSec);
 }
 
 function toggleRepStrip(setId) {
@@ -2338,3 +2421,4 @@ window.confirmWeightEdit = confirmWeightEdit;
 window.editDuration = editDuration;
 window.adjustEditDuration = adjustEditDuration;
 window.confirmDurationEdit = confirmDurationEdit;
+window.showDurationTimer = showDurationTimer;

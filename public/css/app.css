@@ -1436,6 +1436,7 @@ html, body {
 .timer-overlay[data-mode="emom"] .timer-ring-progress { stroke: #e94560; }
 .timer-overlay[data-mode="amrap"] .timer-ring-progress { stroke: #4ade80; }
 .timer-overlay[data-mode="superset"] .timer-ring-progress { stroke: #8b5cf6; }
+.timer-overlay[data-mode="duration"] .timer-ring-progress { stroke: #3b82f6; }
 
 /* Workout Summary */
 .summary-header {
