@@ -81,28 +81,30 @@ function formatPlateBreakdown(result) {
 
 // Generate warmup scheme for Starting Strength
 function generateWarmups(workWeight, barWeight = 45) {
-  if (workWeight <= barWeight) return [];
   const warmups = [];
 
-  // Empty bar x5
+  // Always start with empty bar x5
   warmups.push({ weight: barWeight, reps: 5, label: 'Empty bar' });
 
-  if (workWeight > barWeight * 1.5) {
-    // 40% x5
-    const w40 = roundToNearest(workWeight * 0.4, 5);
-    if (w40 > barWeight) warmups.push({ weight: w40, reps: 5, label: '40%' });
-  }
+  // Only add intermediate warmups if work weight is above the bar
+  if (workWeight > barWeight) {
+    if (workWeight > barWeight * 1.5) {
+      // 40% x5
+      const w40 = roundToNearest(workWeight * 0.4, 5);
+      if (w40 > barWeight) warmups.push({ weight: w40, reps: 5, label: '40%' });
+    }
 
-  if (workWeight > barWeight * 2) {
-    // 60% x3
-    const w60 = roundToNearest(workWeight * 0.6, 5);
-    warmups.push({ weight: w60, reps: 3, label: '60%' });
-  }
+    if (workWeight > barWeight * 2) {
+      // 60% x3
+      const w60 = roundToNearest(workWeight * 0.6, 5);
+      warmups.push({ weight: w60, reps: 3, label: '60%' });
+    }
 
-  if (workWeight > barWeight * 2.5) {
-    // 80% x2
-    const w80 = roundToNearest(workWeight * 0.8, 5);
-    warmups.push({ weight: w80, reps: 2, label: '80%' });
+    if (workWeight > barWeight * 2.5) {
+      // 80% x2
+      const w80 = roundToNearest(workWeight * 0.8, 5);
+      warmups.push({ weight: w80, reps: 2, label: '80%' });
+    }
   }
 
   return warmups;

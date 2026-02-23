@@ -191,7 +191,7 @@ async function startWorkout(dayId) {
     setMap[programEx.exerciseId] = [];
 
     // Warmup sets
-    if (exercise.isBarbell && workWeight > exercise.barbellWeight) {
+    if (exercise.isBarbell) {
       const warmups = generateWarmups(workWeight, exercise.barbellWeight);
       for (const wu of warmups) {
         const s = {
