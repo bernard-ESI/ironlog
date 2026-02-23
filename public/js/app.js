@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=3').catch(() => {});
   }
 });
 
@@ -827,7 +827,7 @@ async function renderMore(el) {
     </div>
 
     <div class="text-center mt-24 text-muted text-sm">
-      IronLog v1.0.0<br>
+      IronLog v1.1.0<br>
       Built for the iron.
     </div>
   `;
