@@ -387,17 +387,48 @@ async function editWeight(exerciseId) {
   const sets = activeWorkout.sets[exerciseId];
   if (!sets) return;
   const workSets = sets.filter(s => !s.isWarmup);
+  const oldWarmups = sets.filter(s => s.isWarmup);
   const currentWeight = workSets[0]?.targetWeight || 45;
+  const exerciseMap = await DB.getExerciseMap();
+  const exercise = exerciseMap[exerciseId];
 
   const newWeight = prompt('Enter weight (lbs):', currentWeight);
   if (newWeight === null) return;
   const w = parseFloat(newWeight);
   if (isNaN(w) || w < 0) return;
 
+  // Update work sets
   for (const s of workSets) {
     s.targetWeight = w;
     s.actualWeight = w;
     await DB.put('sets', s);
+  }
+
+  // Regenerate warmup sets for new weight
+  if (exercise && exercise.isBarbell) {
+    // Delete old warmups from DB
+    for (const s of oldWarmups) {
+      await DB.delete('sets', s.id);
+    }
+
+    // Generate new warmups
+    const newWarmups = generateWarmups(w, exercise.barbellWeight || 45);
+    const newWarmupSets = [];
+    let order = 0;
+    for (const wu of newWarmups) {
+      const s = {
+        workoutId: activeWorkout.workout.id, exerciseId: Number(exerciseId),
+        setNumber: 0, targetWeight: wu.weight, targetReps: wu.reps,
+        actualWeight: wu.weight, actualReps: 0, rpe: null,
+        completed: false, isWarmup: true, isPR: false,
+        restTimeSec: 60, notes: wu.label, timestamp: null, order: order++
+      };
+      s.id = await DB.add('sets', s);
+      newWarmupSets.push(s);
+    }
+
+    // Rebuild sets array: new warmups + existing work sets
+    activeWorkout.sets[exerciseId] = [...newWarmupSets, ...workSets];
   }
 
   renderView('workout');
