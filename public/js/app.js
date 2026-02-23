@@ -292,25 +292,22 @@ async function renderActiveWorkout(el) {
 }
 
 function renderSetRow(set, exercise, isWarmup) {
-  const statusClass = set.completed ? 'completed' : (set.actualReps > 0 && set.actualReps < set.targetReps ? 'failed' : '');
   const label = isWarmup ? 'W' : set.setNumber;
+  const checkClass = set.completed ? 'set-check completed' : 'set-check';
   const rpeClass = set.rpe >= 9 ? 'high' : '';
 
   return `<div class="set-row ${isWarmup ? 'warmup' : ''}">
     <span class="set-label">${label}</span>
     <span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>
-    <div class="set-reps">
-      ${Array.from({ length: set.targetReps }, (_, i) => {
-        const repDone = set.actualReps > i;
-        const cls = set.completed ? 'completed' : (repDone ? 'completed' : '');
-        return `<div class="rep-circle ${cls}" onclick="toggleRep(${set.id}, ${i + 1})">${i + 1}</div>`;
-      }).join('')}
+    <span class="set-target">x${set.targetReps}</span>
+    <div class="${checkClass}" onclick="toggleSet(${set.id})">
+      ${set.completed ? '\u2713' : ''}
     </div>
     ${!isWarmup ? `<span class="rpe-badge ${rpeClass}" onclick="setRPE(${set.id})">${set.rpe ? `@${set.rpe}` : 'RPE'}</span>` : ''}
   </div>`;
 }
 
-async function toggleRep(setId, repNumber) {
+async function toggleSet(setId) {
   // Find the set
   for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
     const set = sets.find(s => s.id === setId);
@@ -318,18 +315,14 @@ async function toggleRep(setId, repNumber) {
 
     const exercise = (await DB.getExerciseMap())[exId];
 
-    if (set.actualReps >= repNumber && set.actualReps === set.targetReps) {
-      // Was complete, mark as failed at this rep count (long-press behavior via tap)
-      set.actualReps = repNumber - 1;
+    if (set.completed) {
+      // Uncheck -- mark incomplete
       set.completed = false;
-    } else if (set.actualReps >= repNumber) {
-      // Reduce reps
-      set.actualReps = repNumber - 1;
-      set.completed = false;
+      set.actualReps = 0;
     } else {
-      // Set reps to this number
-      set.actualReps = repNumber;
-      set.completed = repNumber >= set.targetReps;
+      // Check -- mark complete with all target reps hit
+      set.completed = true;
+      set.actualReps = set.targetReps;
     }
 
     set.timestamp = new Date().toISOString();
@@ -1244,7 +1237,7 @@ function formatDate(dateStr) {
 // Expose globals
 window.navigate = navigate;
 window.startWorkout = startWorkout;
-window.toggleRep = toggleRep;
+window.toggleSet = toggleSet;
 window.setRPE = setRPE;
 window.editWeight = editWeight;
 window.toggleExercise = toggleExercise;
