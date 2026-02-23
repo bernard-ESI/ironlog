@@ -29,12 +29,12 @@ const DEFAULT_EXERCISES = [
   { name: 'Cable Row', category: 'machine', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
 
   // Cardio
-  { name: 'Treadmill Run', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
-  { name: 'Stationary Bike', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
+  { name: 'Treadmill Run', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, tracksDistance: true, isCustom: false, isActive: true },
+  { name: 'Stationary Bike', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, tracksDistance: true, isCustom: false, isActive: true },
 
   // Outdoor
-  { name: 'Hiking', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 60, isCustom: false, isActive: true },
-  { name: 'Trail Run', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
+  { name: 'Hiking', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 60, tracksDistance: true, isCustom: false, isActive: true },
+  { name: 'Trail Run', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, tracksDistance: true, isCustom: false, isActive: true },
 ];
 
 // Starting Strength NLP program template

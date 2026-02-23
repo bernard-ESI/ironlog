@@ -12,15 +12,17 @@ let activeRepStrip = null;   // setId with rep strip open
 function isTimeBased(exercise) { return exercise?.trackingType === 'time'; }
 function isRepsOnly(exercise) { return exercise?.trackingType === 'reps_only'; }
 function isWeightBased(exercise) { return !exercise?.trackingType || exercise.trackingType === 'weight'; }
+function tracksDistance(exercise) { return exercise?.tracksDistance === true; }
 
 // ── Init ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await DB.init();
   await seedDefaults();
 
-  // Backfill trackingType on existing exercises that lack it
+  // Backfill trackingType + tracksDistance on existing exercises
   const allExercises = await DB.getAll('exercises');
   for (const ex of allExercises) {
+    let needsSave = false;
     if (!ex.trackingType) {
       if (ex.category === 'cardio' || ex.category === 'outdoor') {
         ex.trackingType = 'time';
@@ -33,8 +35,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         ex.trackingType = 'weight';
       }
-      await DB.put('exercises', ex);
+      needsSave = true;
     }
+    // Backfill tracksDistance for cardio/outdoor exercises
+    if (ex.tracksDistance === undefined && (ex.category === 'cardio' || ex.category === 'outdoor')) {
+      ex.tracksDistance = true;
+      needsSave = true;
+    }
+    if (needsSave) await DB.put('exercises', ex);
   }
   DB.invalidateExerciseCache();
 
@@ -69,7 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=10').catch(() => {});
   }
 });
 
@@ -315,6 +323,7 @@ async function beginWorkout(dayId, skipped) {
 
       for (let i = 1; i <= totalSets; i++) {
         const roundNum = numRounds > 1 ? Math.ceil(i / setsPerRound) : null;
+        const hasDistance = tracksDistance(exercise);
         const s = {
           workoutId, exerciseId: programEx.exerciseId,
           setNumber: i,
@@ -326,7 +335,8 @@ async function beginWorkout(dayId, skipped) {
           restTimeSec: exercise.defaultRestSec, notes: '', timestamp: null, order: order++,
           sectionId: section.id || null, roundNumber: roundNum,
           targetDuration: timeBased ? duration : null,
-          actualDuration: timeBased ? duration : null
+          actualDuration: timeBased ? duration : null,
+          distance: hasDistance ? null : null // null until user enters
         };
         s.id = await DB.add('sets', s);
         setMap[programEx.exerciseId].push(s);
@@ -457,14 +467,19 @@ function renderExerciseBlock(exId, sets, exerciseMap, lastSessions) {
   const workDuration = workSets[0]?.targetDuration || 0;
 
   // Header display value
-  const headerValue = timeBased ? `${workDuration} min` : `${workWeight} lbs`;
+  const hasDistance = tracksDistance(exercise);
+  const workDistance = workSets.find(s => s.distance)?.distance || null;
+  let headerValue = timeBased ? `${workDuration} min` : `${workWeight} lbs`;
+  if (hasDistance && workDistance) headerValue += ` / ${workDistance} mi`;
 
   const lastData = lastSessions[exId];
   let lastTimeHtml = '';
   if (lastData) {
     if (timeBased) {
       const lastDur = lastData.sets[0]?.actualDuration || lastData.sets[0]?.targetDuration || 0;
-      lastTimeHtml = `<div class="last-time">Last: ${lastDur} min (${formatDate(lastData.date)})</div>`;
+      const lastDist = lastData.sets.find(s => s.distance)?.distance;
+      const distStr = lastDist ? ` / ${lastDist} mi` : '';
+      lastTimeHtml = `<div class="last-time">Last: ${lastDur} min${distStr} (${formatDate(lastData.date)})</div>`;
     } else {
       lastTimeHtml = `<div class="last-time">Last: ${lastData.sets[0]?.actualWeight || 0} x${lastData.sets.map(s => s.actualReps).join(',')} (${formatDate(lastData.date)})</div>`;
     }
@@ -526,16 +541,26 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
     : '';
 
   const timeBased = isTimeBased(exercise);
+  const hasDistance = tracksDistance(exercise);
 
   // Weight/duration cell
   let weightCell;
   if (timeBased) {
     const dur = set.actualDuration || set.targetDuration || 0;
     const isRunning = activeDurationTimer?.setId === set.id;
-    const durLabel = isRunning ? 'Running...' : (set.completed ? `${dur} min` : `${dur} min`);
+    const durLabel = isRunning ? 'Running...' : `${dur} min`;
     weightCell = `<span class="set-weight${isRunning ? ' text-primary' : ''}">${durLabel}</span>`;
   } else {
     weightCell = `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
+  }
+
+  // Distance badge for cardio/outdoor (inline editable)
+  let distanceBadge = '';
+  if (hasDistance && !isWarmup) {
+    const dist = set.distance || '';
+    distanceBadge = `<span class="distance-badge" onclick="editSetDistance(${set.id})">
+      ${dist ? `${dist} mi` : '<span class="text-muted">+ mi</span>'}
+    </span>`;
   }
 
   // Reps badge: tappable for partial reps (work sets only), hidden for time-based
@@ -564,6 +589,7 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
   return `<div class="set-row ${isWarmup ? 'warmup' : ''}">
     <span class="set-label">${label}</span>
     ${weightCell}
+    ${distanceBadge}
     ${repsBadge}
     ${pct}
     <div class="${checkClass}" onclick="toggleSet(${set.id})">
@@ -928,6 +954,63 @@ async function confirmDurationEdit() {
   renderView('workout');
 }
 
+// ── Distance Editor (mileage for cardio/outdoor) ─────────
+function editSetDistance(setId) {
+  // Find the set
+  let targetSet = null;
+  for (const sets of Object.values(activeWorkout.sets)) {
+    targetSet = sets.find(s => s.id === setId);
+    if (targetSet) break;
+  }
+  if (!targetSet) return;
+
+  const current = targetSet.distance || '';
+  showModal(`
+    <div class="modal-title">Log Distance</div>
+    <div class="weight-editor">
+      <input type="number" class="weight-editor-input" id="distance-input" value="${current}"
+        min="0" step="0.1" placeholder="0.0" inputmode="decimal">
+      <div class="weight-editor-unit">miles</div>
+    </div>
+    <div class="weight-editor-controls">
+      <button class="weight-btn" onclick="adjustDistanceInput(-1)">-1</button>
+      <button class="weight-btn" onclick="adjustDistanceInput(-0.5)">-0.5</button>
+      <button class="weight-btn" onclick="adjustDistanceInput(-0.1)">-0.1</button>
+      <button class="weight-btn" onclick="adjustDistanceInput(0.1)">+0.1</button>
+      <button class="weight-btn" onclick="adjustDistanceInput(0.5)">+0.5</button>
+      <button class="weight-btn" onclick="adjustDistanceInput(1)">+1</button>
+    </div>
+    <button class="btn btn-primary mt-16" onclick="saveSetDistance(${setId})">Save</button>
+  `);
+
+  // Auto-focus the input
+  setTimeout(() => document.getElementById('distance-input')?.focus(), 100);
+}
+
+function adjustDistanceInput(delta) {
+  const input = document.getElementById('distance-input');
+  if (!input) return;
+  const current = parseFloat(input.value) || 0;
+  input.value = Math.max(0, Math.round((current + delta) * 10) / 10);
+}
+
+async function saveSetDistance(setId) {
+  const input = document.getElementById('distance-input');
+  const dist = Math.max(0, parseFloat(input?.value) || 0);
+  closeModal();
+
+  // Find and update the set
+  for (const sets of Object.values(activeWorkout.sets)) {
+    const set = sets.find(s => s.id === setId);
+    if (set) {
+      set.distance = dist || null;
+      await DB.put('sets', set);
+      break;
+    }
+  }
+  renderView('workout');
+}
+
 function toggleExercise(exId) {
   const body = document.querySelector(`#ex-${exId} .exercise-card-body`);
   if (body) body.classList.toggle('hidden');
@@ -1075,12 +1158,14 @@ async function showWorkoutSummary(workoutData, stalls) {
 
     if (timeBased) {
       const totalDur = completed.reduce((sum, s) => sum + (s.actualDuration || s.targetDuration || 0), 0);
+      const totalDist = completed.reduce((sum, s) => sum + (s.distance || 0), 0);
+      const distStr = totalDist > 0 ? ` / ${Math.round(totalDist * 10) / 10} mi` : '';
       return `<div class="summary-exercise">
         <div class="summary-exercise-header">
           <span class="summary-exercise-name">${name}</span>
-          <span class="text-muted text-sm">${totalDur} min</span>
+          <span class="text-muted text-sm">${totalDur} min${distStr}</span>
         </div>
-        <div class="summary-exercise-sets">${totalDur} min total</div>
+        <div class="summary-exercise-sets">${totalDur} min${distStr} total</div>
         <div class="summary-exercise-stats">
           <span>${completed.length}/${sets.length} sets</span>
         </div>
@@ -1119,6 +1204,11 @@ async function showWorkoutSummary(workoutData, stalls) {
   const sleepHtml = workout.sleepHours
     ? `<div class="summary-stat"><span>Sleep</span><span>${workout.sleepHours}h</span></div>` : '';
 
+  // Total distance across all completed sets
+  const totalDistance = completedSets.reduce((sum, s) => sum + (s.distance || 0), 0);
+  const distanceHtml = totalDistance > 0
+    ? `<div class="summary-stat"><span>Distance</span><span>${Math.round(totalDistance * 10) / 10} mi</span></div>` : '';
+
   const content = document.getElementById('content');
   content.innerHTML = `
     <div class="summary-header">
@@ -1132,6 +1222,7 @@ async function showWorkoutSummary(workoutData, stalls) {
       <div class="summary-stat"><span>Volume</span><span>${totalVolume.toLocaleString()} lbs</span></div>
       <div class="summary-stat"><span>Sets</span><span>${completedSets.length}/${workSets.length}</span></div>
       <div class="summary-stat"><span>Reps</span><span>${totalReps}</span></div>
+      ${distanceHtml}
       ${readinessHtml}
       ${sleepHtml}
     </div>
@@ -1366,13 +1457,18 @@ async function renderHistory(el) {
       const ex = exerciseMap[exId];
       const name = ex?.name || 'Unknown';
       if (isTimeBased(ex)) {
-        const totalDur = exSets.filter(s => s.completed).reduce((sum, s) => sum + (s.actualDuration || s.targetDuration || 0), 0);
-        return `<div class="text-sm">${name}: ${totalDur} min</div>`;
+        const completedSetsForEx = exSets.filter(s => s.completed);
+        const totalDur = completedSetsForEx.reduce((sum, s) => sum + (s.actualDuration || s.targetDuration || 0), 0);
+        const totalDist = completedSetsForEx.reduce((sum, s) => sum + (s.distance || 0), 0);
+        const distStr = totalDist > 0 ? ` / ${Math.round(totalDist * 10) / 10} mi` : '';
+        return `<div class="text-sm">${name}: ${totalDur} min${distStr}</div>`;
       }
       const reps = exSets.map(s => `${s.actualWeight}x${s.actualReps}${s.completed ? '' : '(F)'}`).join(', ');
       return `<div class="text-sm">${name}: ${reps}</div>`;
     }).join('');
 
+    const totalDistForHistory = workSets.reduce((sum, s) => sum + (s.distance || 0), 0);
+    const histDistStr = totalDistForHistory > 0 ? `<span>&#128099; ${Math.round(totalDistForHistory * 10) / 10} mi</span>` : '';
     cards.push(`<div class="history-card" onclick="toggleHistoryDetail(this)">
       <div class="flex items-center justify-between">
         <div>
@@ -1383,6 +1479,7 @@ async function renderHistory(el) {
       <div class="history-stats">
         <span>&#9201; ${w.duration || 0}min</span>
         <span>&#127947; ${(w.totalVolume || 0).toLocaleString()} lbs</span>
+        ${histDistStr}
         <span>${workSets.length} sets</span>
       </div>
       <div class="history-detail hidden">
@@ -2145,7 +2242,10 @@ async function createExercise() {
     incrementLbs: trackingType === 'weight' ? 5 : 0,
     trackingType, isCustom: true, isActive: true
   };
-  if (trackingType === 'time') exData.defaultDuration = 30;
+  if (trackingType === 'time') {
+    exData.defaultDuration = 30;
+    exData.tracksDistance = true;
+  }
   await DB.add('exercises', exData);
 
   DB.invalidateExerciseCache();
@@ -2454,4 +2554,7 @@ window.confirmWeightEdit = confirmWeightEdit;
 window.editDuration = editDuration;
 window.adjustEditDuration = adjustEditDuration;
 window.confirmDurationEdit = confirmDurationEdit;
+window.editSetDistance = editSetDistance;
+window.adjustDistanceInput = adjustDistanceInput;
+window.saveSetDistance = saveSetDistance;
 window.showDurationTimer = showDurationTimer;
