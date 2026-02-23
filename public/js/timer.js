@@ -149,6 +149,86 @@ class RestTimer {
   }
 }
 
+// Extended timer modes for section types
+class WorkoutTimer extends RestTimer {
+  constructor() {
+    super();
+    this.mode = 'rest'; // rest | emom | amrap | countdown | interval
+    this.currentRound = 0;
+    this.totalRounds = 0;
+    this.onRoundComplete = null;
+  }
+
+  startEMOM(intervalSec, totalRounds) {
+    this.mode = 'emom';
+    this.currentRound = 1;
+    this.totalRounds = totalRounds;
+    this._emomInterval = intervalSec;
+
+    const runRound = () => {
+      if (this.currentRound > this.totalRounds) {
+        this.mode = 'rest';
+        this._completionAlert();
+        if (this.onDone) this.onDone();
+        return;
+      }
+      this.totalSeconds = intervalSec;
+      this.remaining = intervalSec;
+      this.running = true;
+
+      const origOnDone = this.onDone;
+      this.onDone = () => {
+        if (this.onRoundComplete) this.onRoundComplete(this.currentRound, this.totalRounds);
+        this.currentRound++;
+        this._beep(660, 0.15);
+        runRound();
+      };
+      this.worker.postMessage({ cmd: 'start', seconds: intervalSec });
+    };
+
+    runRound();
+  }
+
+  startCountdown(totalSec) {
+    this.mode = 'amrap';
+    this.start(totalSec);
+  }
+
+  startInterval(workSec, restSec, rounds) {
+    this.mode = 'interval';
+    this.currentRound = 1;
+    this.totalRounds = rounds;
+
+    const runWork = () => {
+      if (this.currentRound > this.totalRounds) {
+        this.mode = 'rest';
+        this._completionAlert();
+        if (this.onDone) this.onDone();
+        return;
+      }
+      this.totalSeconds = workSec;
+      this.start(workSec);
+      this.onDone = () => {
+        this._beep(440, 0.15);
+        runRest();
+      };
+    };
+
+    const runRest = () => {
+      this.totalSeconds = restSec;
+      this.start(restSec);
+      this.onDone = () => {
+        if (this.onRoundComplete) this.onRoundComplete(this.currentRound, this.totalRounds);
+        this.currentRound++;
+        this._beep(660, 0.15);
+        runWork();
+      };
+    };
+
+    runWork();
+  }
+}
+
 // Smart rest time calculator
 function calculateRestTime(exercise, setData, previousSetData) {
   let base = exercise.defaultRestSec || 180;
@@ -197,5 +277,6 @@ function formatTime(seconds) {
 }
 
 window.RestTimer = RestTimer;
+window.WorkoutTimer = WorkoutTimer;
 window.calculateRestTime = calculateRestTime;
 window.formatTime = formatTime;

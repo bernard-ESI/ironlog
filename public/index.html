@@ -74,7 +74,8 @@
   </nav>
 
   <!-- Rest Timer Overlay -->
-  <div class="timer-overlay hidden" id="timer-overlay">
+  <div class="timer-overlay hidden" id="timer-overlay" data-mode="rest">
+    <div class="timer-mode-label" id="timer-mode-label"></div>
     <div class="timer-label" id="timer-exercise-label">Rest</div>
     <div class="timer-ring">
       <svg viewBox="0 0 220 220">
@@ -86,6 +87,7 @@
     </div>
     <div class="timer-controls">
       <button class="timer-adjust" onclick="timerAdjust(-30)">-30</button>
+      <button class="timer-pause" id="timer-pause-btn" onclick="timerPause()">PAUSE</button>
       <button class="timer-skip" onclick="timerSkip()">SKIP</button>
       <button class="timer-adjust" onclick="timerAdjust(30)">+30</button>
     </div>

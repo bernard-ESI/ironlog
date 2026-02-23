@@ -108,12 +108,9 @@ async function analyzeWorkout(type, data, settings) {
     return callAnthropicDirect(userPrompt, settings.anthropicApiKey);
   }
 
-  // Fall back to backend proxy
-  if (settings.backendUrl) {
-    return callBackendProxy(userPrompt, settings.backendUrl);
-  }
-
-  throw new Error('No AI configuration. Add your Anthropic API key in Settings or set a backend URL.');
+  // Fall back to backend proxy (explicit URL or auto-detect same-origin)
+  const proxyUrl = settings.backendUrl || window.location.origin;
+  return callBackendProxy(userPrompt, proxyUrl);
 }
 
 async function callAnthropicDirect(prompt, apiKey) {

@@ -210,52 +210,53 @@ function renderBodyweightChart(canvasId, metrics) {
   });
 }
 
-// PR timeline scatter
+// PR timeline chart (grouped by exercise)
 function renderPRChart(canvasId, prs, exerciseMap) {
   destroyChart(canvasId);
   const canvas = document.getElementById(canvasId);
   if (!canvas || prs.length === 0) return;
 
   const sorted = [...prs].sort((a, b) => a.date.localeCompare(b.date));
+  const colors = [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.success, CHART_COLORS.warning, CHART_COLORS.purple];
+
+  // Group by exercise
+  const byExercise = {};
+  for (const pr of sorted) {
+    const name = exerciseMap[pr.exerciseId]?.name || 'Unknown';
+    if (!byExercise[name]) byExercise[name] = [];
+    byExercise[name].push(pr);
+  }
+
+  const datasets = Object.entries(byExercise).map(([name, exPrs], i) => ({
+    label: name,
+    data: exPrs.map(pr => pr.weight),
+    borderColor: colors[i % colors.length],
+    backgroundColor: colors[i % colors.length] + '33',
+    fill: false,
+    tension: 0.3,
+    pointRadius: 6,
+    pointBackgroundColor: colors[i % colors.length]
+  }));
+
+  // Use dates from the longest series for labels
+  const allDates = sorted.map(pr => formatChartDate(pr.date));
+  const uniqueDates = [...new Set(allDates)];
 
   _charts[canvasId] = new Chart(canvas.getContext('2d'), {
-    type: 'scatter',
+    type: 'line',
     data: {
-      datasets: [{
-        label: 'Personal Records',
-        data: sorted.map(pr => ({
-          x: new Date(pr.date),
-          y: pr.weight,
-          label: exerciseMap[pr.exerciseId]?.name || 'Unknown'
-        })),
-        backgroundColor: CHART_COLORS.warning,
-        pointRadius: 8,
-        pointHoverRadius: 12
-      }]
+      labels: uniqueDates,
+      datasets
     },
     options: {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
-        legend: { display: true, labels: { color: '#eee' } },
-        tooltip: {
-          ...CHART_DEFAULTS.plugins.tooltip,
-          callbacks: {
-            label: (ctx) => {
-              const d = ctx.raw;
-              return `${d.label}: ${d.y} lbs`;
-            }
-          }
-        }
+        legend: { display: true, labels: { color: '#eee', boxWidth: 12 } }
       },
       scales: {
-        x: {
-          type: 'time',
-          time: { unit: 'week' },
-          grid: { color: CHART_COLORS.grid },
-          ticks: { color: CHART_COLORS.text }
-        },
-        y: { ...CHART_DEFAULTS.scales.y }
+        ...CHART_DEFAULTS.scales,
+        y: { ...CHART_DEFAULTS.scales.y, title: { display: true, text: 'PR Weight (lbs)', color: CHART_COLORS.text } }
       }
     }
   });

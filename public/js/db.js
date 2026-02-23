@@ -2,7 +2,7 @@
 // All 7 stores: exercises, programs, workouts, sets, bodyMetrics, personalRecords, settings
 
 const DB_NAME = 'ironlog';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let _db = null;
 
 const STORES = {
@@ -42,18 +42,51 @@ function openDB() {
     req.onerror = () => reject(req.error);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      for (const [name, config] of Object.entries(STORES)) {
-        if (!db.objectStoreNames.contains(name)) {
-          const store = db.createObjectStore(name, {
-            keyPath: config.keyPath,
-            autoIncrement: config.autoIncrement || false
-          });
-          if (config.indexes) {
-            for (const idx of config.indexes) {
-              store.createIndex(idx.name, idx.keyPath, { unique: idx.unique });
+      const oldVersion = e.oldVersion;
+      const transaction = e.target.transaction;
+
+      // v0->v1: Create all stores
+      if (oldVersion < 1) {
+        for (const [name, config] of Object.entries(STORES)) {
+          if (!db.objectStoreNames.contains(name)) {
+            const store = db.createObjectStore(name, {
+              keyPath: config.keyPath,
+              autoIncrement: config.autoIncrement || false
+            });
+            if (config.indexes) {
+              for (const idx of config.indexes) {
+                store.createIndex(idx.name, idx.keyPath, { unique: idx.unique });
+              }
             }
           }
         }
+      }
+
+      // v1->v2: Migrate programs exercises[] -> sections[{exercises[]}]
+      if (oldVersion >= 1 && oldVersion < 2) {
+        const store = transaction.objectStore('programs');
+        const getAllReq = store.getAll();
+        getAllReq.onsuccess = () => {
+          for (const program of getAllReq.result) {
+            let changed = false;
+            for (const day of (program.days || [])) {
+              if (day.exercises && !day.sections) {
+                day.sections = [{
+                  id: 'main',
+                  name: 'Main Lifts',
+                  type: 'straight',
+                  exercises: day.exercises,
+                  rounds: 1,
+                  restBetweenRounds: 0,
+                  timer: null
+                }];
+                delete day.exercises;
+                changed = true;
+              }
+            }
+            if (changed) store.put(program);
+          }
+        };
       }
     };
     req.onsuccess = () => {
@@ -222,6 +255,26 @@ const DB = {
   },
 
   async importAll(data) {
+    // Migrate v1 programs to v2 sections format if needed
+    if (data._version < 2 && data.programs) {
+      for (const program of data.programs) {
+        for (const day of (program.days || [])) {
+          if (day.exercises && !day.sections) {
+            day.sections = [{
+              id: 'main',
+              name: 'Main Lifts',
+              type: 'straight',
+              exercises: day.exercises,
+              rounds: 1,
+              restBetweenRounds: 0,
+              timer: null
+            }];
+            delete day.exercises;
+          }
+        }
+      }
+    }
+
     for (const store of Object.keys(STORES)) {
       if (data[store]) {
         await this.clear(store);
@@ -263,6 +316,17 @@ const DB = {
     return workouts
       .sort((a, b) => new Date(b.workout.date) - new Date(a.workout.date))
       .slice(0, limit);
+  },
+
+  // Get last completed session data for an exercise (for "last time" reference)
+  async getLastSetsForExercise(exerciseId) {
+    const history = await this.getExerciseHistory(exerciseId, 1);
+    if (history.length === 0) return null;
+    const session = history[0];
+    return {
+      date: session.workout.date,
+      sets: session.sets.filter(s => !s.isWarmup)
+    };
   },
 
   // Consecutive failure count for an exercise at a given weight

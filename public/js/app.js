@@ -6,12 +6,13 @@ let workoutTimer = null;       // elapsed timer interval
 let restTimer = null;          // RestTimer instance
 let wakeLock = null;
 let selectedProgram = null;
+let activeRepStrip = null;   // setId with rep strip open
 
 // ── Init ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await DB.init();
   await seedDefaults();
-  restTimer = new RestTimer();
+  restTimer = typeof WorkoutTimer !== 'undefined' ? new WorkoutTimer() : new RestTimer();
 
   // Load active program
   const programs = await DB.getAll('programs');
@@ -27,7 +28,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!setMap[s.exerciseId]) setMap[s.exerciseId] = [];
       setMap[s.exerciseId].push(s);
     }
-    activeWorkout = { workout: inProgress, sets: setMap };
+    // Restore sections from program day
+    let sections = null;
+    const prog = programs.find(p => p.id === inProgress.programId);
+    if (prog) {
+      const day = prog.days.find(d => d.id === inProgress.programDayId);
+      if (day) sections = day.sections || null;
+    }
+    activeWorkout = { workout: inProgress, sets: setMap, sections };
   }
 
   setupNav();
@@ -35,7 +43,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=3').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=5').catch(() => {});
   }
 });
 
@@ -113,7 +121,7 @@ async function renderWorkout(el) {
   const exerciseMap = await DB.getExerciseMap();
   const exerciseWeights = {};
 
-  for (const ex of nextDay.exercises) {
+  for (const ex of getDayExercises(nextDay)) {
     if (ex.exerciseId) {
       const exercise = exerciseMap[ex.exerciseId];
       if (exercise) {
@@ -132,7 +140,7 @@ async function renderWorkout(el) {
       <div class="workout-status-sub">${selectedProgram.name} &middot; Last: ${lastDate}</div>
     </div>
 
-    ${nextDay.exercises.map(ex => {
+    ${getDayExercises(nextDay).map(ex => {
       const exercise = exerciseMap[ex.exerciseId];
       if (!exercise) return '';
       const weight = exerciseWeights[ex.exerciseId] || exercise.barbellWeight || 0;
@@ -159,7 +167,62 @@ async function startWorkout(dayId) {
 
   // Unlock audio on user gesture
   if (restTimer) restTimer.unlockAudio();
+
+  // Show readiness check (optional, skippable)
+  showReadinessCheck(dayId);
+}
+
+function showReadinessCheck(dayId) {
+  showModal(`
+    <div class="modal-title">Quick Check-in</div>
+    <div class="form-group">
+      <label class="form-label">Bodyweight (lbs)</label>
+      <input class="form-input" type="number" id="readiness-bw" step="0.1" placeholder="Optional">
+    </div>
+    <div class="form-group">
+      <label class="form-label">How do you feel?</label>
+      <div class="chip-group" id="readiness-feel">
+        ${[1,2,3,4,5].map(n => `<span class="chip ${n === 3 ? 'active' : ''}" onclick="selectReadiness(this, ${n})">${n === 1 ? '1 Bad' : n === 5 ? '5 Great' : n}</span>`).join('')}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Sleep (hours)</label>
+      <input class="form-input" type="number" id="readiness-sleep" step="0.5" placeholder="Optional">
+    </div>
+    <div class="flex gap-12 mt-16">
+      <button class="btn btn-ghost flex-1" onclick="closeModal(); beginWorkout('${dayId}', true)">Skip</button>
+      <button class="btn btn-primary flex-1" onclick="closeModal(); beginWorkout('${dayId}', false)">Start</button>
+    </div>
+  `);
+}
+
+function selectReadiness(el, value) {
+  el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+}
+
+async function beginWorkout(dayId, skipped) {
+  const day = selectedProgram.days.find(d => d.id === dayId);
+  if (!day) return;
+
   await requestWakeLock();
+
+  // Gather readiness data
+  let readinessData = null;
+  if (!skipped) {
+    const bw = parseFloat(document.getElementById('readiness-bw')?.value) || null;
+    const feelChip = document.querySelector('#readiness-feel .chip.active');
+    const feel = feelChip ? parseInt(feelChip.textContent) || 3 : 3;
+    const sleep = parseFloat(document.getElementById('readiness-sleep')?.value) || null;
+    readinessData = { bodyweight: bw, feel, sleep };
+
+    // Also save bodyweight to body metrics if provided
+    if (bw) {
+      const today = new Date().toISOString().split('T')[0];
+      const existing = await DB.getOneByIndex('bodyMetrics', 'date', today);
+      await DB.put('bodyMetrics', { ...(existing || {}), date: today, weight: bw });
+    }
+  }
 
   const exerciseMap = await DB.getExerciseMap();
   const now = new Date();
@@ -171,7 +234,9 @@ async function startWorkout(dayId) {
     endTime: null,
     status: 'in_progress',
     notes: '',
-    bodyweight: null,
+    bodyweight: readinessData?.bodyweight || null,
+    readinessScore: readinessData?.feel || null,
+    sleepHours: readinessData?.sleep || null,
     totalVolume: 0,
     duration: 0,
     aiAnalysis: null
@@ -183,44 +248,53 @@ async function startWorkout(dayId) {
   const setMap = {};
   let order = 0;
 
-  for (const programEx of day.exercises) {
-    const exercise = exerciseMap[programEx.exerciseId];
-    if (!exercise) continue;
+  for (const section of (day.sections || [{ id: 'main', type: 'straight', exercises: getDayExercises(day) }])) {
+    for (const programEx of (section.exercises || [])) {
+      const exercise = exerciseMap[programEx.exerciseId];
+      if (!exercise) continue;
 
-    const workWeight = await Progression.getNextWeight(programEx.exerciseId, exercise, selectedProgram);
-    setMap[programEx.exerciseId] = [];
+      const workWeight = await Progression.getNextWeight(programEx.exerciseId, exercise, selectedProgram);
+      if (!setMap[programEx.exerciseId]) setMap[programEx.exerciseId] = [];
 
-    // Warmup sets
-    if (exercise.isBarbell) {
-      const warmups = generateWarmups(workWeight, exercise.barbellWeight);
-      for (const wu of warmups) {
+      // Warmup sets (only for straight sections, first occurrence)
+      if (section.type === 'straight' && exercise.isBarbell && setMap[programEx.exerciseId].length === 0) {
+        const warmups = generateWarmups(workWeight, exercise.barbellWeight);
+        for (const wu of warmups) {
+          const s = {
+            workoutId, exerciseId: programEx.exerciseId,
+            setNumber: 0, targetWeight: wu.weight, targetReps: wu.reps,
+            actualWeight: wu.weight, actualReps: 0, rpe: null,
+            completed: false, isWarmup: true, isPR: false,
+            restTimeSec: 60, notes: wu.label, timestamp: null, order: order++,
+            sectionId: section.id || null, roundNumber: null
+          };
+          s.id = await DB.add('sets', s);
+          setMap[programEx.exerciseId].push(s);
+        }
+      }
+
+      // Work sets (circuits/supersets multiply by rounds)
+      const numRounds = (section.type === 'circuit' || section.type === 'superset') ? (section.rounds || 1) : 1;
+      const setsPerRound = programEx.sets || 1;
+      const totalSets = numRounds * setsPerRound;
+
+      for (let i = 1; i <= totalSets; i++) {
+        const roundNum = numRounds > 1 ? Math.ceil(i / setsPerRound) : null;
         const s = {
           workoutId, exerciseId: programEx.exerciseId,
-          setNumber: 0, targetWeight: wu.weight, targetReps: wu.reps,
-          actualWeight: wu.weight, actualReps: 0, rpe: null,
-          completed: false, isWarmup: true, isPR: false,
-          restTimeSec: 60, notes: wu.label, timestamp: null, order: order++
+          setNumber: i, targetWeight: workWeight, targetReps: programEx.reps,
+          actualWeight: workWeight, actualReps: 0, rpe: null,
+          completed: false, isWarmup: false, isPR: false,
+          restTimeSec: exercise.defaultRestSec, notes: '', timestamp: null, order: order++,
+          sectionId: section.id || null, roundNumber: roundNum
         };
         s.id = await DB.add('sets', s);
         setMap[programEx.exerciseId].push(s);
       }
     }
-
-    // Work sets
-    for (let i = 1; i <= programEx.sets; i++) {
-      const s = {
-        workoutId, exerciseId: programEx.exerciseId,
-        setNumber: i, targetWeight: workWeight, targetReps: programEx.reps,
-        actualWeight: workWeight, actualReps: 0, rpe: null,
-        completed: false, isWarmup: false, isPR: false,
-        restTimeSec: exercise.defaultRestSec, notes: '', timestamp: null, order: order++
-      };
-      s.id = await DB.add('sets', s);
-      setMap[programEx.exerciseId].push(s);
-    }
   }
 
-  activeWorkout = { workout, sets: setMap };
+  activeWorkout = { workout, sets: setMap, sections: day.sections || null };
   startWorkoutTimer();
   renderView('workout');
 }
@@ -237,6 +311,13 @@ function startWorkoutTimer() {
 
 async function renderActiveWorkout(el) {
   const exerciseMap = await DB.getExerciseMap();
+
+  // Pre-fetch last session data for each exercise
+  const lastSessions = {};
+  for (const exId of Object.keys(activeWorkout.sets)) {
+    lastSessions[exId] = await DB.getLastSetsForExercise(Number(exId));
+  }
+
   const start = new Date(activeWorkout.workout.startTime);
   const elapsed = Math.floor((Date.now() - start.getTime()) / 1000);
 
@@ -248,50 +329,7 @@ async function renderActiveWorkout(el) {
       <span class="workout-timer" id="workout-elapsed">${formatTime(elapsed)}</span>
     </div>
 
-    ${Object.entries(activeWorkout.sets).map(([exId, sets]) => {
-      const exercise = exerciseMap[exId];
-      if (!exercise) return '';
-      const workSets = sets.filter(s => !s.isWarmup);
-      const warmupSets = sets.filter(s => s.isWarmup);
-      const completed = workSets.filter(s => s.completed).length;
-      const total = workSets.length;
-
-      const warmupDone = warmupSets.length > 0 && warmupSets.every(s => s.completed);
-      const workWeight = workSets[0]?.targetWeight || 0;
-
-      return `<div class="exercise-card" id="ex-${exId}">
-        <div class="exercise-card-header" onclick="toggleExercise(${exId})">
-          <div>
-            <div class="exercise-name">${exercise.name}</div>
-            <div class="exercise-target">${completed}/${total} sets</div>
-          </div>
-          <div class="exercise-weight">${workWeight} lbs</div>
-        </div>
-        <div class="exercise-card-body">
-          ${warmupSets.length > 0 ? `
-          <div class="warmup-section ${warmupDone ? 'collapsed' : ''}" id="warmup-${exId}">
-            <div class="warmup-header" onclick="toggleWarmup(${exId})">
-              <span>WARMUP &middot; ${warmupSets.filter(s => s.completed).length}/${warmupSets.length}</span>
-              <span class="warmup-chevron">${warmupDone ? '\u25B6' : '\u25BC'}</span>
-            </div>
-            <div class="warmup-sets">
-              ${warmupSets.map(s => renderSetRow(s, exercise, true, workWeight)).join('')}
-            </div>
-          </div>
-          <div class="warmup-work-divider"></div>
-          ` : ''}
-          ${workSets.map(s => renderSetRow(s, exercise, false, 0)).join('')}
-          <div class="flex items-center justify-between mt-8">
-            <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workWeight})">
-              Plates
-            </button>
-            <button class="btn btn-ghost btn-sm" onclick="editWeight(${exId})">
-              Edit Weight
-            </button>
-          </div>
-        </div>
-      </div>`;
-    }).join('')}
+    ${renderWorkoutExercises(activeWorkout, exerciseMap, lastSessions)}
 
     <textarea class="workout-notes" id="workout-notes"
       placeholder="Workout notes..."
@@ -305,6 +343,122 @@ async function renderActiveWorkout(el) {
   `;
 }
 
+function renderWorkoutExercises(aw, exerciseMap, lastSessions) {
+  // Build section -> exerciseId mapping
+  const sections = aw.sections || null;
+  if (!sections) {
+    // No sections: flat exercise list (legacy)
+    return Object.entries(aw.sets).map(([exId, sets]) =>
+      renderExerciseBlock(exId, sets, exerciseMap, lastSessions)
+    ).join('');
+  }
+
+  // Group exercises by sectionId
+  const sectionExercises = {};
+  for (const section of sections) {
+    sectionExercises[section.id] = [];
+    for (const ex of (section.exercises || [])) {
+      if (aw.sets[ex.exerciseId]) {
+        sectionExercises[section.id].push(ex.exerciseId);
+      }
+    }
+  }
+
+  // Collect exerciseIds that belong to a section
+  const assignedExIds = new Set();
+  for (const exIds of Object.values(sectionExercises)) {
+    for (const id of exIds) assignedExIds.add(String(id));
+  }
+
+  let html = '';
+
+  for (const section of sections) {
+    const exIds = sectionExercises[section.id] || [];
+    if (exIds.length === 0) continue;
+
+    // Section header
+    const color = getSectionTypeColor(section.type);
+    const roundLabel = (section.type === 'circuit' || section.type === 'superset') && section.rounds > 1
+      ? ` &middot; ${section.rounds} rounds`
+      : '';
+    html += `<div class="workout-section-header" style="border-left-color: ${color}">
+      <span class="section-type-badge ${section.type}">${section.type.toUpperCase()}</span>
+      <span class="workout-section-name">${section.name}${roundLabel}</span>
+    </div>`;
+
+    // Render exercises in this section
+    for (const exId of exIds) {
+      html += renderExerciseBlock(exId, aw.sets[exId], exerciseMap, lastSessions);
+    }
+  }
+
+  // Render any exercises not assigned to a section (orphans from old data)
+  for (const [exId, sets] of Object.entries(aw.sets)) {
+    if (!assignedExIds.has(exId)) {
+      html += renderExerciseBlock(exId, sets, exerciseMap, lastSessions);
+    }
+  }
+
+  return html;
+}
+
+function renderExerciseBlock(exId, sets, exerciseMap, lastSessions) {
+  const exercise = exerciseMap[exId];
+  if (!exercise) return '';
+  const workSets = sets.filter(s => !s.isWarmup);
+  const warmupSets = sets.filter(s => s.isWarmup);
+  const completed = workSets.filter(s => s.completed).length;
+  const total = workSets.length;
+
+  const warmupDone = warmupSets.length > 0 && warmupSets.every(s => s.completed);
+  const workWeight = workSets[0]?.targetWeight || 0;
+
+  const lastData = lastSessions[exId];
+  const lastTimeHtml = lastData
+    ? `<div class="last-time">Last: ${lastData.sets[0]?.actualWeight || 0} x${lastData.sets.map(s => s.actualReps).join(',')} (${formatDate(lastData.date)})</div>`
+    : '';
+
+  // Show round info if sets have roundNumber
+  const hasRounds = workSets.some(s => s.roundNumber);
+
+  return `<div class="exercise-card" id="ex-${exId}">
+    <div class="exercise-card-header" onclick="toggleExercise(${exId})">
+      <div>
+        <div class="exercise-name">${exercise.name}</div>
+        <div class="exercise-target">${completed}/${total} sets</div>
+        ${lastTimeHtml}
+      </div>
+      <div class="exercise-weight">${workWeight} lbs</div>
+    </div>
+    <div class="exercise-card-body">
+      ${warmupSets.length > 0 ? `
+      <div class="warmup-section ${warmupDone ? 'collapsed' : ''}" id="warmup-${exId}">
+        <div class="warmup-header" onclick="toggleWarmup(${exId})">
+          <span>WARMUP &middot; ${warmupSets.filter(s => s.completed).length}/${warmupSets.length}</span>
+          <span class="warmup-chevron">${warmupDone ? '\u25B6' : '\u25BC'}</span>
+        </div>
+        <div class="warmup-sets">
+          ${warmupSets.map(s => renderSetRow(s, exercise, true, workWeight)).join('')}
+        </div>
+      </div>
+      <div class="warmup-work-divider"></div>
+      ` : ''}
+      ${workSets.map(s => {
+        const roundPrefix = s.roundNumber ? `<span class="set-round-tag">R${s.roundNumber}</span>` : '';
+        return roundPrefix + renderSetRow(s, exercise, false, 0);
+      }).join('')}
+      <div class="flex items-center justify-between mt-8">
+        <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workWeight})">
+          Plates
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="editWeight(${exId})">
+          Edit Weight
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderSetRow(set, exercise, isWarmup, workWeight) {
   const label = isWarmup ? 'W' : set.setNumber;
   const checkClass = set.completed
@@ -315,16 +469,37 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
     ? `<span class="warmup-pct">${Math.round((set.targetWeight / workWeight) * 100)}%</span>`
     : '';
 
+  // Reps badge: tappable for partial reps (work sets only)
+  let repsBadge;
+  if (isWarmup) {
+    repsBadge = `<span class="set-target">x${set.targetReps}</span>`;
+  } else if (set.completed) {
+    const isPartial = set.actualReps < set.targetReps;
+    const badgeClass = isPartial ? 'reps-badge partial' : 'reps-badge full';
+    repsBadge = `<span class="${badgeClass}" onclick="toggleRepStrip(${set.id})">${set.actualReps}/${set.targetReps}</span>`;
+  } else {
+    repsBadge = `<span class="reps-badge" onclick="toggleRepStrip(${set.id})">x${set.targetReps}</span>`;
+  }
+
+  // Number strip for selecting actual reps
+  const stripOpen = activeRepStrip === set.id;
+  const strip = (!isWarmup && stripOpen) ? `<div class="reps-strip">
+    ${Array.from({length: set.targetReps + 1}, (_, i) =>
+      `<button class="reps-strip-btn ${set.actualReps === i && set.completed ? 'active' : ''}" onclick="setActualReps(${set.id}, ${i})">${i}</button>`
+    ).join('')}
+  </div>` : '';
+
   return `<div class="set-row ${isWarmup ? 'warmup' : ''}">
     <span class="set-label">${label}</span>
     <span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>
-    <span class="set-target">x${set.targetReps}</span>
+    ${repsBadge}
     ${pct}
     <div class="${checkClass}" onclick="toggleSet(${set.id})">
       ${set.completed ? '\u2713' : ''}
     </div>
     ${!isWarmup ? `<span class="rpe-badge ${rpeClass}" onclick="setRPE(${set.id})">${set.rpe ? `@${set.rpe}` : 'RPE'}</span>` : ''}
-  </div>`;
+  </div>
+  ${strip}`;
 }
 
 async function toggleSet(setId) {
@@ -356,6 +531,47 @@ async function toggleSet(setId) {
         // Auto-collapse warmups when all done
         autoCollapseWarmup(exId);
       } else {
+        // Check if this is a circuit/superset round boundary
+        const sectionInfo = getSectionForSet(set);
+        if (sectionInfo && (sectionInfo.type === 'circuit' || sectionInfo.type === 'superset') && sectionInfo.restBetweenRounds > 0) {
+          // Check if we just completed last exercise in a round
+          if (isRoundComplete(set, sectionInfo)) {
+            showRestTimer(sectionInfo.restBetweenRounds, sectionInfo.name, set, 'circuit');
+          }
+          // No per-set rest for circuits (just round rest)
+        } else {
+          const prevSet = sets.find(s => s.setNumber === set.setNumber - 1 && !s.isWarmup);
+          const restSec = calculateRestTime(exercise, set, prevSet);
+          showRestTimer(restSec, exercise.name, set);
+        }
+      }
+    }
+
+    renderView('workout');
+    break;
+  }
+}
+
+function toggleRepStrip(setId) {
+  activeRepStrip = activeRepStrip === setId ? null : setId;
+  renderView('workout');
+}
+
+async function setActualReps(setId, reps) {
+  for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
+    const set = sets.find(s => s.id === setId);
+    if (!set) continue;
+
+    set.actualReps = reps;
+    set.completed = reps > 0;
+    set.timestamp = new Date().toISOString();
+    await DB.put('sets', set);
+    activeRepStrip = null;
+
+    if (set.completed && !set.isWarmup) {
+      const exercise = (await DB.getExerciseMap())[exId];
+      if (exercise) {
+        if (navigator.vibrate) navigator.vibrate(10);
         const prevSet = sets.find(s => s.setNumber === set.setNumber - 1 && !s.isWarmup);
         const restSec = calculateRestTime(exercise, set, prevSet);
         showRestTimer(restSec, exercise.name, set);
@@ -387,15 +603,62 @@ async function editWeight(exerciseId) {
   const sets = activeWorkout.sets[exerciseId];
   if (!sets) return;
   const workSets = sets.filter(s => !s.isWarmup);
-  const oldWarmups = sets.filter(s => s.isWarmup);
   const currentWeight = workSets[0]?.targetWeight || 45;
   const exerciseMap = await DB.getExerciseMap();
   const exercise = exerciseMap[exerciseId];
+  const settings = await DB.getSettings();
 
-  const newWeight = prompt('Enter weight (lbs):', currentWeight);
-  if (newWeight === null) return;
-  const w = parseFloat(newWeight);
+  // Show weight editor bottom sheet
+  window._weightEditTarget = { exerciseId, currentWeight };
+  const plates = calculatePlates(currentWeight, exercise?.barbellWeight || 45, settings.availablePlates);
+
+  showModal(`
+    <div class="modal-title">Edit Weight</div>
+    <div class="weight-editor">
+      <div class="weight-editor-display" id="weight-edit-display">${currentWeight}</div>
+      <div class="weight-editor-unit">lbs</div>
+    </div>
+    <div class="weight-editor-controls">
+      <button class="weight-btn" onclick="adjustEditWeight(-10)">-10</button>
+      <button class="weight-btn" onclick="adjustEditWeight(-5)">-5</button>
+      <button class="weight-btn" onclick="adjustEditWeight(-2.5)">-2.5</button>
+      <button class="weight-btn" onclick="adjustEditWeight(2.5)">+2.5</button>
+      <button class="weight-btn" onclick="adjustEditWeight(5)">+5</button>
+      <button class="weight-btn" onclick="adjustEditWeight(10)">+10</button>
+    </div>
+    <div class="weight-editor-plates" id="weight-edit-plates">${formatPlateBreakdown(plates)}</div>
+    <button class="btn btn-primary mt-16" onclick="confirmWeightEdit()">Apply</button>
+  `);
+}
+
+function adjustEditWeight(delta) {
+  if (!window._weightEditTarget) return;
+  const newWeight = Math.max(0, window._weightEditTarget.currentWeight + delta);
+  window._weightEditTarget.currentWeight = newWeight;
+  const display = document.getElementById('weight-edit-display');
+  if (display) display.textContent = newWeight;
+
+  // Update plate display
+  DB.getSettings().then(settings => {
+    const plates = calculatePlates(newWeight, 45, settings.availablePlates);
+    const platesEl = document.getElementById('weight-edit-plates');
+    if (platesEl) platesEl.textContent = formatPlateBreakdown(plates);
+  });
+}
+
+async function confirmWeightEdit() {
+  if (!window._weightEditTarget) return;
+  const { exerciseId, currentWeight: w } = window._weightEditTarget;
+  window._weightEditTarget = null;
+  closeModal();
+
   if (isNaN(w) || w < 0) return;
+
+  const sets = activeWorkout.sets[exerciseId];
+  const workSets = sets.filter(s => !s.isWarmup);
+  const oldWarmups = sets.filter(s => s.isWarmup);
+  const exerciseMap = await DB.getExerciseMap();
+  const exercise = exerciseMap[exerciseId];
 
   // Update work sets
   for (const s of workSets) {
@@ -406,12 +669,10 @@ async function editWeight(exerciseId) {
 
   // Regenerate warmup sets for new weight
   if (exercise && exercise.isBarbell) {
-    // Delete old warmups from DB
     for (const s of oldWarmups) {
       await DB.delete('sets', s.id);
     }
 
-    // Generate new warmups
     const newWarmups = generateWarmups(w, exercise.barbellWeight || 45);
     const newWarmupSets = [];
     let order = 0;
@@ -427,7 +688,6 @@ async function editWeight(exerciseId) {
       newWarmupSets.push(s);
     }
 
-    // Rebuild sets array: new warmups + existing work sets
     activeWorkout.sets[exerciseId] = [...newWarmupSets, ...workSets];
   }
 
@@ -452,6 +712,23 @@ function autoCollapseWarmup(exId) {
     const section = document.getElementById(`warmup-${exId}`);
     if (section) section.classList.add('collapsed');
   }
+}
+
+function getSectionForSet(set) {
+  if (!activeWorkout?.sections || !set.sectionId) return null;
+  return activeWorkout.sections.find(s => s.id === set.sectionId) || null;
+}
+
+function isRoundComplete(completedSet, section) {
+  if (!activeWorkout || !section || !completedSet.roundNumber) return false;
+  // Check all exercises in this section for this round
+  for (const ex of (section.exercises || [])) {
+    const sets = activeWorkout.sets[ex.exerciseId];
+    if (!sets) continue;
+    const roundSets = sets.filter(s => s.sectionId === section.id && s.roundNumber === completedSet.roundNumber && !s.isWarmup);
+    if (roundSets.some(s => !s.completed)) return false;
+  }
+  return true;
 }
 
 async function finishWorkout() {
@@ -497,9 +774,22 @@ async function finishWorkout() {
 
   clearInterval(workoutTimer);
   releaseWakeLock();
-  activeWorkout = null;
-  showToast('Workout complete!', 'success');
-  renderView('workout');
+
+  // Check for stalls
+  const stalls = [];
+  for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
+    const workSets = sets.filter(s => !s.isWarmup && s.completed);
+    if (workSets.length === 0) continue;
+    const exercise = exerciseMap[exId];
+    if (!exercise) continue;
+    const status = await Progression.checkNLPStatus(Number(exId), exercise, selectedProgram);
+    if (status.status !== 'progressing') {
+      stalls.push(status);
+    }
+  }
+
+  // Show summary view
+  showWorkoutSummary(activeWorkout, stalls);
 }
 
 async function cancelWorkout() {
@@ -519,18 +809,187 @@ async function cancelWorkout() {
   renderView('workout');
 }
 
+// ── WORKOUT SUMMARY ──────────────────────────────────────
+async function showWorkoutSummary(workoutData, stalls) {
+  const exerciseMap = await DB.getExerciseMap();
+  const workout = workoutData.workout;
+  const allSets = Object.values(workoutData.sets).flat();
+  const workSets = allSets.filter(s => !s.isWarmup);
+  const completedSets = workSets.filter(s => s.completed);
+
+  const duration = workout.duration || 0;
+  const totalVolume = workout.totalVolume || 0;
+  const totalReps = completedSets.reduce((sum, s) => sum + s.actualReps, 0);
+
+  // Per-exercise breakdown
+  const byExercise = {};
+  for (const s of workSets) {
+    if (!byExercise[s.exerciseId]) byExercise[s.exerciseId] = [];
+    byExercise[s.exerciseId].push(s);
+  }
+
+  const exerciseBreakdown = Object.entries(byExercise).map(([exId, sets]) => {
+    const ex = exerciseMap[exId];
+    const name = ex?.name || 'Unknown';
+    const completed = sets.filter(s => s.completed);
+    const failed = sets.filter(s => !s.completed);
+    const maxWeight = Math.max(...sets.map(s => s.actualWeight), 0);
+    const volume = completed.reduce((sum, s) => sum + s.actualWeight * s.actualReps, 0);
+    const repsStr = sets.map(s => s.completed ? s.actualReps : `${s.actualReps}F`).join(', ');
+    const prSets = sets.filter(s => s.isPR);
+
+    return `<div class="summary-exercise">
+      <div class="summary-exercise-header">
+        <span class="summary-exercise-name">${name}</span>
+        <span class="text-muted text-sm">${maxWeight} lbs</span>
+      </div>
+      <div class="summary-exercise-sets">${sets[0]?.actualWeight}x[${repsStr}]</div>
+      <div class="summary-exercise-stats">
+        <span>${completed.length}/${sets.length} sets</span>
+        <span>${volume.toLocaleString()} lbs vol</span>
+        ${prSets.length > 0 ? '<span class="text-warning">PR!</span>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Stall alerts
+  const stallHtml = stalls.length > 0
+    ? `<div class="summary-stalls">
+        <div class="summary-stalls-header">Stall Alerts</div>
+        ${stalls.map(s => `<div class="summary-stall-item">${s.message}</div>`).join('')}
+      </div>`
+    : '';
+
+  // Readiness display
+  const readinessHtml = workout.readinessScore
+    ? `<div class="summary-stat"><span>Feel</span><span>${workout.readinessScore}/5</span></div>` : '';
+  const sleepHtml = workout.sleepHours
+    ? `<div class="summary-stat"><span>Sleep</span><span>${workout.sleepHours}h</span></div>` : '';
+
+  const content = document.getElementById('content');
+  content.innerHTML = `
+    <div class="summary-header">
+      <div class="summary-header-icon">&#9989;</div>
+      <div class="summary-header-title">Workout Complete!</div>
+      <div class="summary-header-sub">${formatDate(workout.date)}</div>
+    </div>
+
+    <div class="summary-stats-grid">
+      <div class="summary-stat"><span>Duration</span><span>${duration} min</span></div>
+      <div class="summary-stat"><span>Volume</span><span>${totalVolume.toLocaleString()} lbs</span></div>
+      <div class="summary-stat"><span>Sets</span><span>${completedSets.length}/${workSets.length}</span></div>
+      <div class="summary-stat"><span>Reps</span><span>${totalReps}</span></div>
+      ${readinessHtml}
+      ${sleepHtml}
+    </div>
+
+    <div class="summary-section-title">Exercises</div>
+    ${exerciseBreakdown}
+
+    ${stallHtml}
+
+    <div class="summary-ai-section" id="summary-ai">
+      <button class="btn btn-secondary" id="ai-analyze-btn" onclick="requestAIAnalysis()">
+        Analyze with AI
+      </button>
+    </div>
+
+    ${workout.notes ? `<div class="summary-notes">${workout.notes}</div>` : ''}
+
+    <button class="btn btn-primary mt-16 mb-16" onclick="closeSummary()">Done</button>
+  `;
+
+  // Store reference for AI analysis
+  window._summaryWorkout = workoutData;
+}
+
+async function requestAIAnalysis() {
+  const btn = document.getElementById('ai-analyze-btn');
+  const aiSection = document.getElementById('summary-ai');
+  if (!window._summaryWorkout) return;
+
+  const settings = await DB.getSettings();
+  if (!settings.aiEnabled && !settings.backendUrl) {
+    aiSection.innerHTML = '<div class="text-muted text-sm">Enable AI in Settings to use this feature.</div>';
+    return;
+  }
+
+  btn.textContent = 'Analyzing...';
+  btn.disabled = true;
+
+  try {
+    const exerciseMap = await DB.getExerciseMap();
+    const workout = window._summaryWorkout.workout;
+    const allSets = Object.values(window._summaryWorkout.sets).flat();
+
+    // Get history for exercises in this workout
+    const history = [];
+    for (const exId of Object.keys(window._summaryWorkout.sets)) {
+      const exHistory = await DB.getExerciseHistory(Number(exId), 5);
+      history.push(...exHistory);
+    }
+
+    const analysis = await analyzeWorkout('post_workout', {
+      workout,
+      sets: allSets,
+      exercises: exerciseMap,
+      history
+    }, settings);
+
+    // Save to workout
+    workout.aiAnalysis = analysis;
+    await DB.put('workouts', workout);
+
+    aiSection.innerHTML = `
+      <div class="ai-card">
+        <div class="ai-card-header">AI Analysis</div>
+        <div class="ai-card-body">${analysis}</div>
+      </div>`;
+  } catch (err) {
+    aiSection.innerHTML = `<div class="text-warning text-sm">AI analysis failed: ${err.message}</div>`;
+  }
+}
+
+function closeSummary() {
+  window._summaryWorkout = null;
+  activeWorkout = null;
+  renderView('workout');
+}
+
 // ── REST TIMER ────────────────────────────────────────────
-function showRestTimer(seconds, exerciseName, lastSet) {
+function showRestTimer(seconds, exerciseName, lastSet, mode) {
   const overlay = document.getElementById('timer-overlay');
   overlay.classList.remove('hidden');
+
+  // Set mode styling
+  const timerMode = mode || 'rest';
+  overlay.dataset.mode = timerMode;
+  const modeLabel = document.getElementById('timer-mode-label');
+  if (modeLabel) modeLabel.textContent = timerMode === 'rest' ? '' : timerMode.toUpperCase();
+
+  // Reset pause button
+  const pauseBtn = document.getElementById('timer-pause-btn');
+  if (pauseBtn) pauseBtn.textContent = 'PAUSE';
 
   const circumference = 2 * Math.PI * 100;
   const ring = document.getElementById('timer-ring-progress');
   ring.style.strokeDasharray = circumference;
 
+  // Color ring by mode
+  const modeColors = { rest: '#e94560', circuit: '#fbbf24', emom: '#e94560', amrap: '#4ade80', superset: '#8b5cf6' };
+  ring.style.stroke = modeColors[timerMode] || modeColors.rest;
+
   const timeDisplay = document.getElementById('timer-time');
   const labelDisplay = document.getElementById('timer-exercise-label');
-  labelDisplay.textContent = `Rest after ${exerciseName} Set ${lastSet.setNumber}`;
+  if (timerMode === 'circuit') {
+    labelDisplay.textContent = `Round rest - ${exerciseName}`;
+  } else if (timerMode === 'emom') {
+    labelDisplay.textContent = `EMOM - ${exerciseName}`;
+  } else if (timerMode === 'amrap') {
+    labelDisplay.textContent = `AMRAP - ${exerciseName}`;
+  } else {
+    labelDisplay.textContent = `Rest after ${exerciseName} Set ${lastSet.setNumber}`;
+  }
 
   restTimer.onTick = (remaining, total) => {
     timeDisplay.textContent = formatTime(remaining);
@@ -549,6 +1008,17 @@ function showRestTimer(seconds, exerciseName, lastSet) {
 
 function timerAdjust(delta) {
   restTimer.adjust(delta);
+}
+
+function timerPause() {
+  const btn = document.getElementById('timer-pause-btn');
+  if (restTimer.running) {
+    restTimer.pause();
+    if (btn) btn.textContent = 'RESUME';
+  } else {
+    restTimer.resume();
+    if (btn) btn.textContent = 'PAUSE';
+  }
 }
 
 function timerSkip() {
@@ -692,6 +1162,11 @@ async function renderProgress(el) {
       <span class="chart-title">Bodyweight</span>
     </div>
     <div class="chart-container"><canvas id="chart-bodyweight"></canvas></div>
+
+    <div class="chart-header">
+      <span class="chart-title">PR Timeline</span>
+    </div>
+    <div class="chart-container"><canvas id="chart-prs"></canvas></div>
   `;
 
   await updateProgressCharts();
@@ -722,6 +1197,10 @@ async function updateProgressCharts() {
   // Bodyweight
   const metrics = await DB.getAll('bodyMetrics');
   IronCharts.renderBodyweightChart('chart-bodyweight', metrics);
+
+  // PR Timeline
+  const allPRs = await DB.getAll('personalRecords');
+  IronCharts.renderPRChart('chart-prs', allPRs, exerciseMap);
 }
 
 // ── PROGRAMS VIEW ─────────────────────────────────────────
@@ -735,7 +1214,7 @@ async function renderPrograms(el) {
         <div class="list-item-icon">${p.type === 'strength' ? '&#127947;' : p.type === 'cardio' ? '&#127939;' : '&#9968;'}</div>
         <div class="list-item-text">
           <div class="list-item-title">${p.name}</div>
-          <div class="list-item-sub">${p.days.length} days &middot; ${p.type}</div>
+          <div class="list-item-sub">${p.days.length} days &middot; ${p.days.reduce((n, d) => n + getDayExercises(d).length, 0)} exercises &middot; ${p.type}</div>
         </div>
         <span class="list-item-badge ${selectedProgram?.id === p.id ? 'active' : ''}">${selectedProgram?.id === p.id ? 'Active' : 'Select'}</span>
       </div>
@@ -749,11 +1228,8 @@ async function viewProgram(id) {
   const program = await DB.get('programs', id);
   if (!program) return;
 
-  const exerciseMap = await DB.getExerciseMap();
-
   // Toggle active
   if (selectedProgram?.id !== id) {
-    // Deactivate current
     if (selectedProgram) {
       selectedProgram.isDefault = false;
       await DB.put('programs', selectedProgram);
@@ -766,20 +1242,8 @@ async function viewProgram(id) {
     return;
   }
 
-  // Show program detail in modal
-  showModal(`
-    <div class="modal-title">${program.name}</div>
-    ${program.days.map(day => `
-      <div class="card">
-        <div class="card-title">${day.name}</div>
-        ${day.exercises.map(ex => {
-          const exercise = exerciseMap[ex.exerciseId];
-          return `<div class="text-sm mt-8">${exercise?.name || '?'} - ${ex.sets}x${ex.reps}</div>`;
-        }).join('')}
-      </div>
-    `).join('')}
-    ${program.isCustom ? `<button class="btn btn-danger btn-sm mt-16" onclick="deleteProgram(${id})">Delete Program</button>` : ''}
-  `);
+  // Open editor for active program
+  editProgramView(id);
 }
 
 async function deleteProgram(id) {
@@ -799,53 +1263,328 @@ async function deleteProgram(id) {
 }
 
 function showCreateProgram() {
-  showModal(`
-    <div class="modal-title">Create Program</div>
-    <div class="form-group">
-      <label class="form-label">Name</label>
-      <input class="form-input" id="new-prog-name" placeholder="My Program">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Type</label>
-      <select class="form-select" id="new-prog-type">
-        <option value="strength">Strength</option>
-        <option value="cardio">Cardio</option>
-        <option value="hybrid">Hybrid</option>
-        <option value="outdoor">Outdoor</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Days Per Week</label>
-      <input class="form-input" id="new-prog-days" type="number" value="3" min="1" max="7">
-    </div>
-    <button class="btn btn-primary mt-16" onclick="createProgram()">Create</button>
-  `);
+  editProgramView(null);
 }
 
-async function createProgram() {
-  const name = document.getElementById('new-prog-name').value.trim();
-  const type = document.getElementById('new-prog-type').value;
-  const daysPerWeek = parseInt(document.getElementById('new-prog-days').value) || 3;
+// ── PROGRAM EDITOR ───────────────────────────────────────
+let editingProgram = null;
 
-  if (!name) { showToast('Enter a name', 'error'); return; }
-
-  const days = [];
-  for (let i = 1; i <= daysPerWeek; i++) {
-    days.push({ id: `day${i}`, name: `Day ${i}`, exercises: [] });
-  }
-
-  const program = {
-    name, type, isDefault: false, daysPerWeek,
-    alternating: daysPerWeek <= 3,
-    days,
+async function editProgramView(id) {
+  const program = id ? await DB.get('programs', id) : null;
+  editingProgram = program ? JSON.parse(JSON.stringify(program)) : {
+    name: '',
+    type: 'strength',
+    isDefault: false,
+    daysPerWeek: 1,
+    alternating: true,
+    days: [{
+      id: `day1_${Date.now()}`,
+      name: 'Day 1',
+      sections: [{
+        id: `sec_${Date.now()}`,
+        name: 'Main',
+        type: 'straight',
+        exercises: [],
+        rounds: 1,
+        restBetweenRounds: 0,
+        timer: null
+      }]
+    }],
     progression: { upperIncrement: 5, lowerIncrement: 5, deadliftIncrement: 10, failureRetries: 3, deloadPercent: 10, maxDeloads: 3 },
     isCustom: true
   };
+  renderProgramEditor();
+}
 
-  await DB.add('programs', program);
-  closeModal();
-  showToast('Program created', 'success');
+function getSectionTypeColor(type) {
+  const colors = {
+    straight: '#3b82f6', circuit: '#fbbf24', superset: '#8b5cf6',
+    emom: '#e94560', amrap: '#4ade80', warmup: '#fb923c', cooldown: '#22d3ee'
+  };
+  return colors[type] || '#3b82f6';
+}
+
+async function renderProgramEditor() {
+  const el = document.getElementById('content');
+  const exerciseMap = await DB.getExerciseMap();
+  const p = editingProgram;
+
+  el.innerHTML = `
+    <button class="btn btn-ghost" onclick="exitProgramEditor()">&larr; Back</button>
+
+    <div class="form-group mt-16">
+      <label class="form-label">Program Name</label>
+      <input class="form-input" id="prog-edit-name" value="${p.name}" placeholder="My Program">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Type</label>
+      <select class="form-select" id="prog-edit-type">
+        ${['strength', 'cardio', 'hybrid', 'outdoor'].map(t =>
+          `<option value="${t}" ${p.type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`
+        ).join('')}
+      </select>
+    </div>
+
+    <div class="flex items-center justify-between mt-24">
+      <div class="section-title" style="margin:0">Workout Days</div>
+    </div>
+
+    ${p.days.map((day, di) => `
+      <div class="day-card">
+        <div class="day-card-header">
+          <input class="day-card-name" value="${day.name}"
+            onchange="editingProgram.days[${di}].name = this.value">
+          ${p.days.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveDay(${di})">&#10005;</button>` : ''}
+        </div>
+
+        ${(day.sections || []).map((sec, si) => `
+          <div class="section-card" style="border-left-color: ${getSectionTypeColor(sec.type)}">
+            <div class="section-card-header">
+              <div class="flex items-center gap-8">
+                <span class="section-type-badge ${sec.type}">${sec.type.toUpperCase()}</span>
+                <span class="section-card-name">${sec.name}</span>
+              </div>
+              <div class="flex items-center gap-8">
+                <button class="btn btn-ghost btn-sm" onclick="editSection(${di}, ${si})">&#9998;</button>
+                ${(day.sections || []).length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveSection(${di}, ${si})">&#10005;</button>` : ''}
+              </div>
+            </div>
+            ${sec.type !== 'straight' && sec.rounds > 1 ? `<div class="section-meta">${sec.rounds} rounds &middot; ${sec.restBetweenRounds}s rest</div>` : ''}
+            <div class="section-exercises">
+              ${(sec.exercises || []).map((ex, ei) => {
+                const exercise = exerciseMap[ex.exerciseId];
+                return `<div class="section-exercise-row">
+                  <span class="section-exercise-name">${exercise?.name || 'Unknown'}</span>
+                  <div class="flex items-center gap-8">
+                    <span class="section-exercise-config">${ex.sets}x${ex.reps}</span>
+                    <button class="btn btn-ghost btn-sm" onclick="editorRemoveExercise(${di}, ${si}, ${ei})">&#10005;</button>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+            <button class="btn btn-ghost btn-sm" style="color:var(--primary)" onclick="editorAddExercise(${di}, ${si})">+ Add Exercise</button>
+          </div>
+        `).join('')}
+
+        <button class="btn btn-ghost btn-sm mt-8" style="color:var(--secondary)" onclick="editorAddSection(${di})">+ Add Section</button>
+      </div>
+    `).join('')}
+
+    <button class="btn btn-secondary mt-16" onclick="editorAddDay()">+ Add Day</button>
+
+    ${editingProgram.id ? `<button class="btn btn-danger mt-8" onclick="editorDeleteProgram()">Delete Program</button>` : ''}
+
+    <div class="flex gap-12 mt-24 mb-16">
+      <button class="btn btn-ghost flex-1" onclick="exitProgramEditor()">Cancel</button>
+      <button class="btn btn-primary flex-1" onclick="saveProgramEditor()">Save</button>
+    </div>
+  `;
+}
+
+function exitProgramEditor() {
+  editingProgram = null;
   renderView('programs');
+}
+
+async function saveProgramEditor() {
+  if (!editingProgram) return;
+  const name = document.getElementById('prog-edit-name')?.value?.trim();
+  const type = document.getElementById('prog-edit-type')?.value;
+  if (name) editingProgram.name = name;
+  if (type) editingProgram.type = type;
+  if (!editingProgram.name) { showToast('Enter a program name', 'error'); return; }
+
+  editingProgram.daysPerWeek = editingProgram.days.length;
+  editingProgram.alternating = editingProgram.days.length <= 3;
+
+  if (editingProgram.id) {
+    await DB.put('programs', editingProgram);
+  } else {
+    editingProgram.id = await DB.add('programs', editingProgram);
+  }
+
+  if (editingProgram.isDefault) selectedProgram = JSON.parse(JSON.stringify(editingProgram));
+  editingProgram = null;
+  showToast('Program saved', 'success');
+  renderView('programs');
+}
+
+async function editorDeleteProgram() {
+  if (!editingProgram?.id) return;
+  if (!confirm('Delete this program?')) return;
+  await DB.delete('programs', editingProgram.id);
+  if (selectedProgram?.id === editingProgram.id) {
+    const programs = await DB.getAll('programs');
+    selectedProgram = programs[0] || null;
+    if (selectedProgram) { selectedProgram.isDefault = true; await DB.put('programs', selectedProgram); }
+  }
+  editingProgram = null;
+  showToast('Program deleted');
+  renderView('programs');
+}
+
+function editorAddDay() {
+  const n = editingProgram.days.length + 1;
+  editingProgram.days.push({
+    id: `day${n}_${Date.now()}`,
+    name: `Day ${n}`,
+    sections: [{ id: `sec_${Date.now()}`, name: 'Main', type: 'straight', exercises: [], rounds: 1, restBetweenRounds: 0, timer: null }]
+  });
+  renderProgramEditor();
+}
+
+function editorRemoveDay(dayIdx) {
+  if (editingProgram.days.length <= 1) return;
+  editingProgram.days.splice(dayIdx, 1);
+  renderProgramEditor();
+}
+
+function editorAddSection(dayIdx) {
+  editingProgram.days[dayIdx].sections.push({
+    id: `sec_${Date.now()}`,
+    name: 'New Section',
+    type: 'straight',
+    exercises: [],
+    rounds: 1,
+    restBetweenRounds: 0,
+    timer: null
+  });
+  renderProgramEditor();
+}
+
+function editorRemoveSection(dayIdx, secIdx) {
+  const sections = editingProgram.days[dayIdx].sections;
+  if (sections.length <= 1) return;
+  sections.splice(secIdx, 1);
+  renderProgramEditor();
+}
+
+function editorRemoveExercise(dayIdx, secIdx, exIdx) {
+  editingProgram.days[dayIdx].sections[secIdx].exercises.splice(exIdx, 1);
+  renderProgramEditor();
+}
+
+function editSection(dayIdx, secIdx) {
+  const sec = editingProgram.days[dayIdx].sections[secIdx];
+  const showRounds = sec.type !== 'straight';
+  showModal(`
+    <div class="modal-title">Edit Section</div>
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input class="form-input" id="sec-edit-name" value="${sec.name}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Type</label>
+      <div class="chip-group" id="sec-type-chips">
+        ${['straight', 'circuit', 'superset', 'emom', 'amrap', 'warmup', 'cooldown'].map(t =>
+          `<span class="chip ${sec.type === t ? 'active' : ''}" onclick="selectSectionType('${t}')">${t}</span>`
+        ).join('')}
+      </div>
+    </div>
+    <div class="form-group" id="sec-rounds-group" style="${showRounds ? '' : 'display:none'}">
+      <label class="form-label">Rounds</label>
+      <input class="form-input" type="number" id="sec-edit-rounds" value="${sec.rounds || 1}" min="1" max="20">
+    </div>
+    <div class="form-group" id="sec-rest-group" style="${showRounds ? '' : 'display:none'}">
+      <label class="form-label">Rest Between Rounds (sec)</label>
+      <input class="form-input" type="number" id="sec-edit-rest" value="${sec.restBetweenRounds || 0}" min="0" step="15">
+    </div>
+    <button class="btn btn-primary mt-16" onclick="saveSectionEdit(${dayIdx}, ${secIdx})">Done</button>
+  `);
+}
+
+function selectSectionType(type) {
+  document.querySelectorAll('#sec-type-chips .chip').forEach(c => {
+    c.classList.toggle('active', c.textContent.toLowerCase() === type);
+  });
+  const show = type !== 'straight';
+  document.getElementById('sec-rounds-group').style.display = show ? '' : 'none';
+  document.getElementById('sec-rest-group').style.display = show ? '' : 'none';
+}
+
+function saveSectionEdit(dayIdx, secIdx) {
+  const sec = editingProgram.days[dayIdx].sections[secIdx];
+  sec.name = document.getElementById('sec-edit-name').value.trim() || sec.name;
+  const activeChip = document.querySelector('#sec-type-chips .chip.active');
+  if (activeChip) sec.type = activeChip.textContent.toLowerCase();
+  sec.rounds = parseInt(document.getElementById('sec-edit-rounds').value) || 1;
+  sec.restBetweenRounds = parseInt(document.getElementById('sec-edit-rest').value) || 0;
+  closeModal();
+  renderProgramEditor();
+}
+
+async function editorAddExercise(dayIdx, secIdx) {
+  const exercises = await DB.getAll('exercises');
+  const active = exercises.filter(e => e.isActive);
+  window._pickerTarget = { dayIdx, secIdx };
+
+  const categories = {};
+  for (const e of active) {
+    if (!categories[e.category]) categories[e.category] = [];
+    categories[e.category].push(e);
+  }
+
+  showModal(`
+    <div class="modal-title">Add Exercise</div>
+    <input class="search-input" placeholder="Search exercises..." oninput="filterPickerExercises(this.value)">
+    <div id="picker-exercise-list">
+      ${Object.entries(categories).map(([cat, exs]) => `
+        <div class="section-title picker-cat">${cat.toUpperCase()}</div>
+        ${exs.map(e => `
+          <div class="picker-item" data-name="${e.name.toLowerCase()}" onclick="pickExercise(${e.id}, ${e.defaultSets}, ${e.defaultReps})">
+            <div class="picker-item-name">${e.name}</div>
+            <div class="picker-item-sub">${e.defaultSets}x${e.defaultReps} &middot; ${e.muscleGroups.join(', ')}</div>
+          </div>
+        `).join('')}
+      `).join('')}
+    </div>
+  `);
+}
+
+function filterPickerExercises(query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('#picker-exercise-list .picker-item').forEach(item => {
+    item.style.display = item.dataset.name.includes(q) ? '' : 'none';
+  });
+  document.querySelectorAll('#picker-exercise-list .picker-cat').forEach(title => {
+    let next = title.nextElementSibling;
+    let hasVisible = false;
+    while (next && !next.classList.contains('picker-cat') && !next.classList.contains('section-title')) {
+      if (next.style.display !== 'none' && next.classList.contains('picker-item')) hasVisible = true;
+      next = next.nextElementSibling;
+    }
+    title.style.display = hasVisible ? '' : 'none';
+  });
+}
+
+function pickExercise(exerciseId, defaultSets, defaultReps) {
+  const modal = document.querySelector('.modal-sheet');
+  modal.innerHTML = `
+    <div class="modal-handle"></div>
+    <div class="modal-title">Configure Exercise</div>
+    <div class="flex gap-12">
+      <div class="form-group flex-1">
+        <label class="form-label">Sets</label>
+        <input class="form-input" type="number" id="picker-sets" value="${defaultSets}" min="1" max="20">
+      </div>
+      <div class="form-group flex-1">
+        <label class="form-label">Reps</label>
+        <input class="form-input" type="number" id="picker-reps" value="${defaultReps}" min="1" max="100">
+      </div>
+    </div>
+    <button class="btn btn-primary mt-16" onclick="confirmExercisePick(${exerciseId})">Add</button>
+  `;
+}
+
+function confirmExercisePick(exerciseId) {
+  const sets = parseInt(document.getElementById('picker-sets').value) || 3;
+  const reps = parseInt(document.getElementById('picker-reps').value) || 5;
+  const { dayIdx, secIdx } = window._pickerTarget;
+  const section = editingProgram.days[dayIdx].sections[secIdx];
+  section.exercises.push({ exerciseId, sets, reps, order: section.exercises.length + 1 });
+  closeModal();
+  renderProgramEditor();
 }
 
 // ── MORE VIEW ─────────────────────────────────────────────
@@ -900,7 +1639,7 @@ async function renderMore(el) {
     </div>
 
     <div class="text-center mt-24 text-muted text-sm">
-      IronLog v1.1.0<br>
+      IronLog v2.0.0<br>
       Built for the iron.
     </div>
   `;
@@ -1328,7 +2067,23 @@ window.updateProgressCharts = updateProgressCharts;
 window.viewProgram = viewProgram;
 window.deleteProgram = deleteProgram;
 window.showCreateProgram = showCreateProgram;
-window.createProgram = createProgram;
+window.editProgramView = editProgramView;
+window.renderProgramEditor = renderProgramEditor;
+window.exitProgramEditor = exitProgramEditor;
+window.saveProgramEditor = saveProgramEditor;
+window.editorDeleteProgram = editorDeleteProgram;
+window.editorAddDay = editorAddDay;
+window.editorRemoveDay = editorRemoveDay;
+window.editorAddSection = editorAddSection;
+window.editorRemoveSection = editorRemoveSection;
+window.editorRemoveExercise = editorRemoveExercise;
+window.editorAddExercise = editorAddExercise;
+window.editSection = editSection;
+window.selectSectionType = selectSectionType;
+window.saveSectionEdit = saveSectionEdit;
+window.filterPickerExercises = filterPickerExercises;
+window.pickExercise = pickExercise;
+window.confirmExercisePick = confirmExercisePick;
 window.showBodyTracking = showBodyTracking;
 window.saveBodyMetrics = saveBodyMetrics;
 window.deleteBodyMetric = deleteBodyMetric;
@@ -1345,3 +2100,13 @@ window.exportData = exportData;
 window.importData = importData;
 window.showModal = showModal;
 window.closeModal = closeModal;
+window.toggleRepStrip = toggleRepStrip;
+window.setActualReps = setActualReps;
+window.timerPause = timerPause;
+window.beginWorkout = beginWorkout;
+window.selectReadiness = selectReadiness;
+window.showWorkoutSummary = showWorkoutSummary;
+window.requestAIAnalysis = requestAIAnalysis;
+window.closeSummary = closeSummary;
+window.adjustEditWeight = adjustEditWeight;
+window.confirmWeightEdit = confirmWeightEdit;

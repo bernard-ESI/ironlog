@@ -56,20 +56,36 @@ function createSSNLP(exerciseMap) {
       {
         id: 'A',
         name: 'Workout A',
-        exercises: [
-          { exerciseId: find('Squat'), sets: 3, reps: 5, order: 1 },
-          { exerciseId: find('Bench Press'), sets: 3, reps: 5, order: 2 },
-          { exerciseId: find('Deadlift'), sets: 1, reps: 5, order: 3 }
-        ]
+        sections: [{
+          id: 'main',
+          name: 'Main Lifts',
+          type: 'straight',
+          exercises: [
+            { exerciseId: find('Squat'), sets: 3, reps: 5, order: 1 },
+            { exerciseId: find('Bench Press'), sets: 3, reps: 5, order: 2 },
+            { exerciseId: find('Deadlift'), sets: 1, reps: 5, order: 3 }
+          ],
+          rounds: 1,
+          restBetweenRounds: 0,
+          timer: null
+        }]
       },
       {
         id: 'B',
         name: 'Workout B',
-        exercises: [
-          { exerciseId: find('Squat'), sets: 3, reps: 5, order: 1 },
-          { exerciseId: find('Overhead Press'), sets: 3, reps: 5, order: 2 },
-          { exerciseId: find('Barbell Row'), sets: 3, reps: 5, order: 3 }
-        ]
+        sections: [{
+          id: 'main',
+          name: 'Main Lifts',
+          type: 'straight',
+          exercises: [
+            { exerciseId: find('Squat'), sets: 3, reps: 5, order: 1 },
+            { exerciseId: find('Overhead Press'), sets: 3, reps: 5, order: 2 },
+            { exerciseId: find('Barbell Row'), sets: 3, reps: 5, order: 3 }
+          ],
+          rounds: 1,
+          restBetweenRounds: 0,
+          timer: null
+        }]
       }
     ],
     progression: {
@@ -209,7 +225,22 @@ async function seedDefaults() {
   });
 }
 
+// Get all exercises from a day (flattens sections for backward compat)
+function getDayExercises(day) {
+  if (day.sections) {
+    const exercises = [];
+    for (const section of day.sections) {
+      for (const ex of (section.exercises || [])) {
+        exercises.push(ex);
+      }
+    }
+    return exercises;
+  }
+  return day.exercises || [];
+}
+
 window.DEFAULT_EXERCISES = DEFAULT_EXERCISES;
 window.Progression = Progression;
 window.seedDefaults = seedDefaults;
 window.createSSNLP = createSSNLP;
+window.getDayExercises = getDayExercises;
