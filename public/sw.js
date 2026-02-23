@@ -1,6 +1,6 @@
 // IronLog Service Worker - Cache-first for app shell, network-first for API
 
-const CACHE_NAME = 'ironlog-v8';
+const CACHE_NAME = 'ironlog-v9';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -59,9 +59,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell: cache-first
+  // App shell: stale-while-revalidate (ignoreSearch so ?v=9 matches cached /js/app.js)
   event.respondWith(
-    caches.match(event.request).then(cached => {
+    caches.match(event.request, { ignoreSearch: true }).then(cached => {
       const fetchPromise = fetch(event.request).then(response => {
         if (response.ok) {
           const clone = response.clone();

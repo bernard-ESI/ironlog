@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=8').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {});
   }
 });
 
@@ -585,7 +585,9 @@ async function toggleSet(setId) {
     const exercise = (await DB.getExerciseMap())[exId];
 
     // Time-based exercises: tap starts/stops a countdown timer
-    if (isTimeBased(exercise) && !set.isWarmup) {
+    // Belt-and-suspenders: detect via exercise trackingType OR set's own targetDuration
+    const setIsTimeBased = isTimeBased(exercise) || (set.targetDuration != null && set.targetDuration > 0);
+    if (setIsTimeBased && !set.isWarmup) {
       if (set.completed) {
         // Uncheck — cancel completion
         set.completed = false;
@@ -657,7 +659,14 @@ async function toggleSet(setId) {
 }
 
 function showDurationTimer(totalSec, exerciseName, set) {
+  // Stop any existing timer first
+  if (restTimer.running) restTimer.stop();
+
+  // Unlock audio context (required for Web Audio on mobile)
+  restTimer.unlockAudio();
+
   const overlay = document.getElementById('timer-overlay');
+  if (!overlay) return;
   overlay.classList.remove('hidden');
   overlay.dataset.mode = 'duration';
 
@@ -688,7 +697,6 @@ function showDurationTimer(totalSec, exerciseName, set) {
 
   restTimer.onDone = async () => {
     overlay.classList.add('hidden');
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
     // Auto-complete the set
     if (activeDurationTimer) {
@@ -1267,8 +1275,33 @@ function timerPause() {
 }
 
 function timerSkip() {
-  restTimer.skip();
-  document.getElementById('timer-overlay').classList.add('hidden');
+  const overlay = document.getElementById('timer-overlay');
+  const isDuration = overlay.dataset.mode === 'duration';
+
+  if (isDuration && activeDurationTimer) {
+    // For duration timer skip: record actual elapsed time, not full duration
+    const elapsedSec = Math.floor((Date.now() - activeDurationTimer.startTime) / 1000);
+    restTimer.stop();
+    overlay.classList.add('hidden');
+
+    // Find and complete the set with partial duration
+    for (const sets of Object.values(activeWorkout.sets)) {
+      const set = sets.find(s => s.id === activeDurationTimer.setId);
+      if (set) {
+        set.completed = true;
+        set.actualDuration = Math.round(elapsedSec / 60 * 10) / 10;
+        set.timestamp = new Date().toISOString();
+        DB.put('sets', set);
+        break;
+      }
+    }
+    activeDurationTimer = null;
+    showToast('Duration skipped', 'info');
+    renderView('workout');
+  } else {
+    restTimer.skip();
+    overlay.classList.add('hidden');
+  }
 }
 
 // ── PLATE CALCULATOR ──────────────────────────────────────
