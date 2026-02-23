@@ -256,19 +256,33 @@ async function renderActiveWorkout(el) {
       const completed = workSets.filter(s => s.completed).length;
       const total = workSets.length;
 
+      const warmupDone = warmupSets.length > 0 && warmupSets.every(s => s.completed);
+      const workWeight = workSets[0]?.targetWeight || 0;
+
       return `<div class="exercise-card" id="ex-${exId}">
         <div class="exercise-card-header" onclick="toggleExercise(${exId})">
           <div>
             <div class="exercise-name">${exercise.name}</div>
             <div class="exercise-target">${completed}/${total} sets</div>
           </div>
-          <div class="exercise-weight">${workSets[0]?.targetWeight || 0} lbs</div>
+          <div class="exercise-weight">${workWeight} lbs</div>
         </div>
         <div class="exercise-card-body">
-          ${warmupSets.map(s => renderSetRow(s, exercise, true)).join('')}
-          ${workSets.map(s => renderSetRow(s, exercise, false)).join('')}
+          ${warmupSets.length > 0 ? `
+          <div class="warmup-section ${warmupDone ? 'collapsed' : ''}" id="warmup-${exId}">
+            <div class="warmup-header" onclick="toggleWarmup(${exId})">
+              <span>WARMUP &middot; ${warmupSets.filter(s => s.completed).length}/${warmupSets.length}</span>
+              <span class="warmup-chevron">${warmupDone ? '\u25B6' : '\u25BC'}</span>
+            </div>
+            <div class="warmup-sets">
+              ${warmupSets.map(s => renderSetRow(s, exercise, true, workWeight)).join('')}
+            </div>
+          </div>
+          <div class="warmup-work-divider"></div>
+          ` : ''}
+          ${workSets.map(s => renderSetRow(s, exercise, false, 0)).join('')}
           <div class="flex items-center justify-between mt-8">
-            <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workSets[0]?.targetWeight || 0})">
+            <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workWeight})">
               Plates
             </button>
             <button class="btn btn-ghost btn-sm" onclick="editWeight(${exId})">
@@ -291,15 +305,21 @@ async function renderActiveWorkout(el) {
   `;
 }
 
-function renderSetRow(set, exercise, isWarmup) {
+function renderSetRow(set, exercise, isWarmup, workWeight) {
   const label = isWarmup ? 'W' : set.setNumber;
-  const checkClass = set.completed ? 'set-check completed' : 'set-check';
+  const checkClass = set.completed
+    ? (isWarmup ? 'set-check warmup-completed' : 'set-check completed')
+    : 'set-check';
   const rpeClass = set.rpe >= 9 ? 'high' : '';
+  const pct = isWarmup && workWeight > 0
+    ? `<span class="warmup-pct">${Math.round((set.targetWeight / workWeight) * 100)}%</span>`
+    : '';
 
   return `<div class="set-row ${isWarmup ? 'warmup' : ''}">
     <span class="set-label">${label}</span>
     <span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>
     <span class="set-target">x${set.targetReps}</span>
+    ${pct}
     <div class="${checkClass}" onclick="toggleSet(${set.id})">
       ${set.completed ? '\u2713' : ''}
     </div>
@@ -323,16 +343,23 @@ async function toggleSet(setId) {
       // Check -- mark complete with all target reps hit
       set.completed = true;
       set.actualReps = set.targetReps;
+      // Haptic feedback
+      if (navigator.vibrate) navigator.vibrate(10);
     }
 
     set.timestamp = new Date().toISOString();
     await DB.put('sets', set);
 
-    // If set completed, start rest timer
+    // If set completed, start rest timer (shorter for warmups)
     if (set.completed && exercise) {
-      const prevSet = sets.find(s => s.setNumber === set.setNumber - 1 && !s.isWarmup);
-      const restSec = calculateRestTime(exercise, set, prevSet);
-      showRestTimer(restSec, exercise.name, set);
+      if (set.isWarmup) {
+        // Auto-collapse warmups when all done
+        autoCollapseWarmup(exId);
+      } else {
+        const prevSet = sets.find(s => s.setNumber === set.setNumber - 1 && !s.isWarmup);
+        const restSec = calculateRestTime(exercise, set, prevSet);
+        showRestTimer(restSec, exercise.name, set);
+      }
     }
 
     renderView('workout');
@@ -379,6 +406,21 @@ async function editWeight(exerciseId) {
 function toggleExercise(exId) {
   const body = document.querySelector(`#ex-${exId} .exercise-card-body`);
   if (body) body.classList.toggle('hidden');
+}
+
+function toggleWarmup(exId) {
+  const section = document.getElementById(`warmup-${exId}`);
+  if (section) section.classList.toggle('collapsed');
+}
+
+function autoCollapseWarmup(exId) {
+  const sets = activeWorkout.sets[exId];
+  if (!sets) return;
+  const warmups = sets.filter(s => s.isWarmup);
+  if (warmups.length > 0 && warmups.every(s => s.completed)) {
+    const section = document.getElementById(`warmup-${exId}`);
+    if (section) section.classList.add('collapsed');
+  }
 }
 
 async function finishWorkout() {
@@ -1238,6 +1280,7 @@ function formatDate(dateStr) {
 window.navigate = navigate;
 window.startWorkout = startWorkout;
 window.toggleSet = toggleSet;
+window.toggleWarmup = toggleWarmup;
 window.setRPE = setRPE;
 window.editWeight = editWeight;
 window.toggleExercise = toggleExercise;
