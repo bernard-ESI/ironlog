@@ -1579,10 +1579,33 @@ html, body {
   margin: 16px 0;
 }
 
-.weight-editor-display {
+.weight-editor-input {
   font-size: 48px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+  background: none;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  color: var(--text);
+  text-align: center;
+  width: 160px;
+  padding: 0 4px;
+  font-family: inherit;
+}
+
+.weight-editor-input:focus {
+  outline: none;
+  border-bottom-color: var(--primary);
+}
+
+/* Remove number input spinner */
+.weight-editor-input::-webkit-inner-spin-button,
+.weight-editor-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.weight-editor-input[type=number] {
+  -moz-appearance: textfield;
 }
 
 .weight-editor-unit {

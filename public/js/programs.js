@@ -3,38 +3,38 @@
 // Default exercise library
 const DEFAULT_EXERCISES = [
   // Barbell compounds
-  { name: 'Squat', category: 'barbell', muscleGroups: ['quads', 'glutes', 'hamstrings', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Bench Press', category: 'barbell', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Overhead Press', category: 'barbell', muscleGroups: ['shoulders', 'triceps', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Deadlift', category: 'barbell', muscleGroups: ['back', 'hamstrings', 'glutes', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 1, defaultReps: 5, defaultRestSec: 300, incrementLbs: 10, isCustom: false, isActive: true },
-  { name: 'Barbell Row', category: 'barbell', muscleGroups: ['back', 'biceps', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Power Clean', category: 'barbell', muscleGroups: ['back', 'shoulders', 'hamstrings', 'traps'], isBarbell: true, barbellWeight: 45, defaultSets: 5, defaultReps: 3, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Front Squat', category: 'barbell', muscleGroups: ['quads', 'core', 'shoulders'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Romanian Deadlift', category: 'barbell', muscleGroups: ['hamstrings', 'glutes', 'back'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 8, defaultRestSec: 120, incrementLbs: 5, isCustom: false, isActive: true },
+  { name: 'Squat', category: 'barbell', muscleGroups: ['quads', 'glutes', 'hamstrings', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Bench Press', category: 'barbell', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Overhead Press', category: 'barbell', muscleGroups: ['shoulders', 'triceps', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Deadlift', category: 'barbell', muscleGroups: ['back', 'hamstrings', 'glutes', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 1, defaultReps: 5, defaultRestSec: 300, incrementLbs: 10, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Barbell Row', category: 'barbell', muscleGroups: ['back', 'biceps', 'core'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Power Clean', category: 'barbell', muscleGroups: ['back', 'shoulders', 'hamstrings', 'traps'], isBarbell: true, barbellWeight: 45, defaultSets: 5, defaultReps: 3, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Front Squat', category: 'barbell', muscleGroups: ['quads', 'core', 'shoulders'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 5, defaultRestSec: 180, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Romanian Deadlift', category: 'barbell', muscleGroups: ['hamstrings', 'glutes', 'back'], isBarbell: true, barbellWeight: 45, defaultSets: 3, defaultReps: 8, defaultRestSec: 120, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
 
   // Dumbbell
-  { name: 'Dumbbell Curl', category: 'dumbbell', muscleGroups: ['biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Dumbbell Lateral Raise', category: 'dumbbell', muscleGroups: ['shoulders'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 12, defaultRestSec: 60, incrementLbs: 2.5, isCustom: false, isActive: true },
-  { name: 'Dumbbell Bench Press', category: 'dumbbell', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, isCustom: false, isActive: true },
+  { name: 'Dumbbell Curl', category: 'dumbbell', muscleGroups: ['biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Dumbbell Lateral Raise', category: 'dumbbell', muscleGroups: ['shoulders'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 12, defaultRestSec: 60, incrementLbs: 2.5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Dumbbell Bench Press', category: 'dumbbell', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
 
   // Bodyweight
-  { name: 'Pull-up', category: 'bodyweight', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 8, defaultRestSec: 120, incrementLbs: 0, isCustom: false, isActive: true },
-  { name: 'Dip', category: 'bodyweight', muscleGroups: ['chest', 'triceps', 'shoulders'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 0, isCustom: false, isActive: true },
-  { name: 'Push-up', category: 'bodyweight', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 15, defaultRestSec: 60, incrementLbs: 0, isCustom: false, isActive: true },
-  { name: 'Plank', category: 'bodyweight', muscleGroups: ['core'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 60, defaultRestSec: 60, incrementLbs: 0, isCustom: false, isActive: true },
+  { name: 'Pull-up', category: 'bodyweight', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 8, defaultRestSec: 120, incrementLbs: 0, trackingType: 'reps_only', isCustom: false, isActive: true },
+  { name: 'Dip', category: 'bodyweight', muscleGroups: ['chest', 'triceps', 'shoulders'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 0, trackingType: 'reps_only', isCustom: false, isActive: true },
+  { name: 'Push-up', category: 'bodyweight', muscleGroups: ['chest', 'shoulders', 'triceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 15, defaultRestSec: 60, incrementLbs: 0, trackingType: 'reps_only', isCustom: false, isActive: true },
+  { name: 'Plank', category: 'bodyweight', muscleGroups: ['core'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 60, incrementLbs: 0, trackingType: 'time', defaultDuration: 1, isCustom: false, isActive: true },
 
   // Machine
-  { name: 'Leg Press', category: 'machine', muscleGroups: ['quads', 'glutes'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 120, incrementLbs: 10, isCustom: false, isActive: true },
-  { name: 'Lat Pulldown', category: 'machine', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, isCustom: false, isActive: true },
-  { name: 'Cable Row', category: 'machine', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, isCustom: false, isActive: true },
+  { name: 'Leg Press', category: 'machine', muscleGroups: ['quads', 'glutes'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 120, incrementLbs: 10, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Lat Pulldown', category: 'machine', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
+  { name: 'Cable Row', category: 'machine', muscleGroups: ['back', 'biceps'], isBarbell: false, barbellWeight: 0, defaultSets: 3, defaultReps: 10, defaultRestSec: 90, incrementLbs: 5, trackingType: 'weight', isCustom: false, isActive: true },
 
   // Cardio
-  { name: 'Treadmill Run', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, isCustom: false, isActive: true },
-  { name: 'Stationary Bike', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, isCustom: false, isActive: true },
+  { name: 'Treadmill Run', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
+  { name: 'Stationary Bike', category: 'cardio', muscleGroups: ['cardio'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
 
   // Outdoor
-  { name: 'Hiking', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, isCustom: false, isActive: true },
-  { name: 'Trail Run', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, isCustom: false, isActive: true },
+  { name: 'Hiking', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 60, isCustom: false, isActive: true },
+  { name: 'Trail Run', category: 'outdoor', muscleGroups: ['cardio', 'legs'], isBarbell: false, barbellWeight: 0, defaultSets: 1, defaultReps: 1, defaultRestSec: 0, incrementLbs: 0, trackingType: 'time', defaultDuration: 30, isCustom: false, isActive: true },
 ];
 
 // Starting Strength NLP program template
@@ -104,6 +104,9 @@ function createSSNLP(exerciseMap) {
 const Progression = {
   // Calculate next weight for an exercise based on history
   async getNextWeight(exerciseId, exercise, program) {
+    // No weight progression for time-based or reps-only exercises
+    if (exercise.trackingType === 'time' || exercise.trackingType === 'reps_only') return 0;
+
     const history = await DB.getExerciseHistory(exerciseId, 5);
     if (history.length === 0) return exercise.barbellWeight || 45; // Start with empty bar
 

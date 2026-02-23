@@ -8,10 +8,36 @@ let wakeLock = null;
 let selectedProgram = null;
 let activeRepStrip = null;   // setId with rep strip open
 
+// ── Tracking Type Helpers ─────────────────────────────────
+function isTimeBased(exercise) { return exercise?.trackingType === 'time'; }
+function isRepsOnly(exercise) { return exercise?.trackingType === 'reps_only'; }
+function isWeightBased(exercise) { return !exercise?.trackingType || exercise.trackingType === 'weight'; }
+
 // ── Init ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await DB.init();
   await seedDefaults();
+
+  // Backfill trackingType on existing exercises that lack it
+  const allExercises = await DB.getAll('exercises');
+  for (const ex of allExercises) {
+    if (!ex.trackingType) {
+      if (ex.category === 'cardio' || ex.category === 'outdoor') {
+        ex.trackingType = 'time';
+        ex.defaultDuration = ex.defaultDuration || 30;
+      } else if (ex.category === 'bodyweight' && ex.name === 'Plank') {
+        ex.trackingType = 'time';
+        ex.defaultDuration = 1;
+      } else if (ex.category === 'bodyweight') {
+        ex.trackingType = 'reps_only';
+      } else {
+        ex.trackingType = 'weight';
+      }
+      await DB.put('exercises', ex);
+    }
+  }
+  DB.invalidateExerciseCache();
+
   restTimer = typeof WorkoutTimer !== 'undefined' ? new WorkoutTimer() : new RestTimer();
 
   // Load active program
@@ -43,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=5').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=8').catch(() => {});
   }
 });
 
@@ -144,13 +170,17 @@ async function renderWorkout(el) {
       const exercise = exerciseMap[ex.exerciseId];
       if (!exercise) return '';
       const weight = exerciseWeights[ex.exerciseId] || exercise.barbellWeight || 0;
+      const timeBased = isTimeBased(exercise);
+      const dur = ex.duration || exercise.defaultDuration || 30;
+      const targetLabel = timeBased ? `${dur} min` : `${ex.sets}x${ex.reps}`;
+      const weightLabel = timeBased ? `${dur} min` : `${weight} lbs`;
       return `<div class="exercise-card">
         <div class="exercise-card-header">
           <div>
             <div class="exercise-name">${exercise.name}</div>
-            <div class="exercise-target">${ex.sets}x${ex.reps}</div>
+            <div class="exercise-target">${targetLabel}</div>
           </div>
-          <div class="exercise-weight">${weight} lbs</div>
+          <div class="exercise-weight">${weightLabel}</div>
         </div>
       </div>`;
     }).join('')}
@@ -256,8 +286,11 @@ async function beginWorkout(dayId, skipped) {
       const workWeight = await Progression.getNextWeight(programEx.exerciseId, exercise, selectedProgram);
       if (!setMap[programEx.exerciseId]) setMap[programEx.exerciseId] = [];
 
-      // Warmup sets (only for straight sections, first occurrence)
-      if (section.type === 'straight' && exercise.isBarbell && setMap[programEx.exerciseId].length === 0) {
+      const timeBased = isTimeBased(exercise);
+      const repsOnly = isRepsOnly(exercise);
+
+      // Warmup sets (only for straight sections with weight-based barbell exercises)
+      if (section.type === 'straight' && exercise.isBarbell && !timeBased && !repsOnly && setMap[programEx.exerciseId].length === 0) {
         const warmups = generateWarmups(workWeight, exercise.barbellWeight);
         for (const wu of warmups) {
           const s = {
@@ -266,7 +299,8 @@ async function beginWorkout(dayId, skipped) {
             actualWeight: wu.weight, actualReps: 0, rpe: null,
             completed: false, isWarmup: true, isPR: false,
             restTimeSec: 60, notes: wu.label, timestamp: null, order: order++,
-            sectionId: section.id || null, roundNumber: null
+            sectionId: section.id || null, roundNumber: null,
+            targetDuration: null, actualDuration: null
           };
           s.id = await DB.add('sets', s);
           setMap[programEx.exerciseId].push(s);
@@ -277,16 +311,22 @@ async function beginWorkout(dayId, skipped) {
       const numRounds = (section.type === 'circuit' || section.type === 'superset') ? (section.rounds || 1) : 1;
       const setsPerRound = programEx.sets || 1;
       const totalSets = numRounds * setsPerRound;
+      const duration = programEx.duration || exercise.defaultDuration || 30;
 
       for (let i = 1; i <= totalSets; i++) {
         const roundNum = numRounds > 1 ? Math.ceil(i / setsPerRound) : null;
         const s = {
           workoutId, exerciseId: programEx.exerciseId,
-          setNumber: i, targetWeight: workWeight, targetReps: programEx.reps,
-          actualWeight: workWeight, actualReps: 0, rpe: null,
+          setNumber: i,
+          targetWeight: timeBased ? 0 : workWeight,
+          targetReps: timeBased ? 0 : programEx.reps,
+          actualWeight: timeBased ? 0 : workWeight,
+          actualReps: 0, rpe: null,
           completed: false, isWarmup: false, isPR: false,
           restTimeSec: exercise.defaultRestSec, notes: '', timestamp: null, order: order++,
-          sectionId: section.id || null, roundNumber: roundNum
+          sectionId: section.id || null, roundNumber: roundNum,
+          targetDuration: timeBased ? duration : null,
+          actualDuration: timeBased ? duration : null
         };
         s.id = await DB.add('sets', s);
         setMap[programEx.exerciseId].push(s);
@@ -409,17 +449,40 @@ function renderExerciseBlock(exId, sets, exerciseMap, lastSessions) {
   const warmupSets = sets.filter(s => s.isWarmup);
   const completed = workSets.filter(s => s.completed).length;
   const total = workSets.length;
+  const timeBased = isTimeBased(exercise);
+  const repsOnly = isRepsOnly(exercise);
 
   const warmupDone = warmupSets.length > 0 && warmupSets.every(s => s.completed);
   const workWeight = workSets[0]?.targetWeight || 0;
+  const workDuration = workSets[0]?.targetDuration || 0;
+
+  // Header display value
+  const headerValue = timeBased ? `${workDuration} min` : `${workWeight} lbs`;
 
   const lastData = lastSessions[exId];
-  const lastTimeHtml = lastData
-    ? `<div class="last-time">Last: ${lastData.sets[0]?.actualWeight || 0} x${lastData.sets.map(s => s.actualReps).join(',')} (${formatDate(lastData.date)})</div>`
-    : '';
+  let lastTimeHtml = '';
+  if (lastData) {
+    if (timeBased) {
+      const lastDur = lastData.sets[0]?.actualDuration || lastData.sets[0]?.targetDuration || 0;
+      lastTimeHtml = `<div class="last-time">Last: ${lastDur} min (${formatDate(lastData.date)})</div>`;
+    } else {
+      lastTimeHtml = `<div class="last-time">Last: ${lastData.sets[0]?.actualWeight || 0} x${lastData.sets.map(s => s.actualReps).join(',')} (${formatDate(lastData.date)})</div>`;
+    }
+  }
 
-  // Show round info if sets have roundNumber
-  const hasRounds = workSets.some(s => s.roundNumber);
+  // Bottom buttons: plate calc + edit weight/duration
+  let bottomButtons;
+  if (timeBased) {
+    bottomButtons = `<div class="flex items-center justify-between mt-8">
+      <span></span>
+      <button class="btn btn-ghost btn-sm" onclick="editDuration(${exId})">Edit Duration</button>
+    </div>`;
+  } else {
+    bottomButtons = `<div class="flex items-center justify-between mt-8">
+      <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workWeight})">Plates</button>
+      <button class="btn btn-ghost btn-sm" onclick="editWeight(${exId})">Edit Weight</button>
+    </div>`;
+  }
 
   return `<div class="exercise-card" id="ex-${exId}">
     <div class="exercise-card-header" onclick="toggleExercise(${exId})">
@@ -428,7 +491,7 @@ function renderExerciseBlock(exId, sets, exerciseMap, lastSessions) {
         <div class="exercise-target">${completed}/${total} sets</div>
         ${lastTimeHtml}
       </div>
-      <div class="exercise-weight">${workWeight} lbs</div>
+      <div class="exercise-weight">${headerValue}</div>
     </div>
     <div class="exercise-card-body">
       ${warmupSets.length > 0 ? `
@@ -447,14 +510,7 @@ function renderExerciseBlock(exId, sets, exerciseMap, lastSessions) {
         const roundPrefix = s.roundNumber ? `<span class="set-round-tag">R${s.roundNumber}</span>` : '';
         return roundPrefix + renderSetRow(s, exercise, false, 0);
       }).join('')}
-      <div class="flex items-center justify-between mt-8">
-        <button class="btn btn-ghost btn-sm" onclick="openPlateCalc(${workWeight})">
-          Plates
-        </button>
-        <button class="btn btn-ghost btn-sm" onclick="editWeight(${exId})">
-          Edit Weight
-        </button>
-      </div>
+      ${bottomButtons}
     </div>
   </div>`;
 }
@@ -469,9 +525,23 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
     ? `<span class="warmup-pct">${Math.round((set.targetWeight / workWeight) * 100)}%</span>`
     : '';
 
-  // Reps badge: tappable for partial reps (work sets only)
-  let repsBadge;
-  if (isWarmup) {
+  const timeBased = isTimeBased(exercise);
+
+  // Weight/duration cell
+  let weightCell;
+  if (timeBased) {
+    const dur = set.actualDuration || set.targetDuration || 0;
+    weightCell = `<span class="set-weight">${dur} min</span>`;
+  } else {
+    weightCell = `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
+  }
+
+  // Reps badge: tappable for partial reps (work sets only), hidden for time-based
+  let repsBadge = '';
+  if (timeBased) {
+    // No reps badge for time-based — just the checkmark
+    repsBadge = '';
+  } else if (isWarmup) {
     repsBadge = `<span class="set-target">x${set.targetReps}</span>`;
   } else if (set.completed) {
     const isPartial = set.actualReps < set.targetReps;
@@ -481,9 +551,9 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
     repsBadge = `<span class="reps-badge" onclick="toggleRepStrip(${set.id})">x${set.targetReps}</span>`;
   }
 
-  // Number strip for selecting actual reps
+  // Number strip for selecting actual reps (not for time-based)
   const stripOpen = activeRepStrip === set.id;
-  const strip = (!isWarmup && stripOpen) ? `<div class="reps-strip">
+  const strip = (!isWarmup && !timeBased && stripOpen) ? `<div class="reps-strip">
     ${Array.from({length: set.targetReps + 1}, (_, i) =>
       `<button class="reps-strip-btn ${set.actualReps === i && set.completed ? 'active' : ''}" onclick="setActualReps(${set.id}, ${i})">${i}</button>`
     ).join('')}
@@ -491,13 +561,13 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
 
   return `<div class="set-row ${isWarmup ? 'warmup' : ''}">
     <span class="set-label">${label}</span>
-    <span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>
+    ${weightCell}
     ${repsBadge}
     ${pct}
     <div class="${checkClass}" onclick="toggleSet(${set.id})">
       ${set.completed ? '\u2713' : ''}
     </div>
-    ${!isWarmup ? `<span class="rpe-badge ${rpeClass}" onclick="setRPE(${set.id})">${set.rpe ? `@${set.rpe}` : 'RPE'}</span>` : ''}
+    ${!isWarmup && !timeBased ? `<span class="rpe-badge ${rpeClass}" onclick="setRPE(${set.id})">${set.rpe ? `@${set.rpe}` : 'RPE'}</span>` : ''}
   </div>
   ${strip}`;
 }
@@ -615,7 +685,8 @@ async function editWeight(exerciseId) {
   showModal(`
     <div class="modal-title">Edit Weight</div>
     <div class="weight-editor">
-      <div class="weight-editor-display" id="weight-edit-display">${currentWeight}</div>
+      <input type="number" class="weight-editor-input" id="weight-edit-input" value="${currentWeight}"
+        min="0" step="2.5" oninput="onWeightInputChange(this.value)">
       <div class="weight-editor-unit">lbs</div>
     </div>
     <div class="weight-editor-controls">
@@ -635,8 +706,21 @@ function adjustEditWeight(delta) {
   if (!window._weightEditTarget) return;
   const newWeight = Math.max(0, window._weightEditTarget.currentWeight + delta);
   window._weightEditTarget.currentWeight = newWeight;
-  const display = document.getElementById('weight-edit-display');
-  if (display) display.textContent = newWeight;
+  const input = document.getElementById('weight-edit-input');
+  if (input) input.value = newWeight;
+
+  // Update plate display
+  DB.getSettings().then(settings => {
+    const plates = calculatePlates(newWeight, 45, settings.availablePlates);
+    const platesEl = document.getElementById('weight-edit-plates');
+    if (platesEl) platesEl.textContent = formatPlateBreakdown(plates);
+  });
+}
+
+function onWeightInputChange(value) {
+  if (!window._weightEditTarget) return;
+  const newWeight = Math.max(0, parseFloat(value) || 0);
+  window._weightEditTarget.currentWeight = newWeight;
 
   // Update plate display
   DB.getSettings().then(settings => {
@@ -660,11 +744,13 @@ async function confirmWeightEdit() {
   const exerciseMap = await DB.getExerciseMap();
   const exercise = exerciseMap[exerciseId];
 
-  // Update work sets
+  // Update only uncompleted work sets (preserve completed sets' recorded weight)
   for (const s of workSets) {
-    s.targetWeight = w;
-    s.actualWeight = w;
-    await DB.put('sets', s);
+    if (!s.completed) {
+      s.targetWeight = w;
+      s.actualWeight = w;
+      await DB.put('sets', s);
+    }
   }
 
   // Regenerate warmup sets for new weight
@@ -689,6 +775,63 @@ async function confirmWeightEdit() {
     }
 
     activeWorkout.sets[exerciseId] = [...newWarmupSets, ...workSets];
+  }
+
+  renderView('workout');
+}
+
+async function editDuration(exerciseId) {
+  const sets = activeWorkout.sets[exerciseId];
+  if (!sets) return;
+  const workSets = sets.filter(s => !s.isWarmup);
+  const currentDuration = workSets[0]?.targetDuration || 30;
+
+  window._durationEditTarget = { exerciseId, currentDuration };
+
+  showModal(`
+    <div class="modal-title">Edit Duration</div>
+    <div class="weight-editor">
+      <input type="number" class="weight-editor-input" id="duration-edit-input" value="${currentDuration}"
+        min="1" step="1">
+      <div class="weight-editor-unit">min</div>
+    </div>
+    <div class="weight-editor-controls">
+      <button class="weight-btn" onclick="adjustEditDuration(-10)">-10</button>
+      <button class="weight-btn" onclick="adjustEditDuration(-5)">-5</button>
+      <button class="weight-btn" onclick="adjustEditDuration(-1)">-1</button>
+      <button class="weight-btn" onclick="adjustEditDuration(1)">+1</button>
+      <button class="weight-btn" onclick="adjustEditDuration(5)">+5</button>
+      <button class="weight-btn" onclick="adjustEditDuration(10)">+10</button>
+    </div>
+    <button class="btn btn-primary mt-16" onclick="confirmDurationEdit()">Apply</button>
+  `);
+}
+
+function adjustEditDuration(delta) {
+  if (!window._durationEditTarget) return;
+  const newDur = Math.max(1, window._durationEditTarget.currentDuration + delta);
+  window._durationEditTarget.currentDuration = newDur;
+  const input = document.getElementById('duration-edit-input');
+  if (input) input.value = newDur;
+}
+
+async function confirmDurationEdit() {
+  if (!window._durationEditTarget) return;
+  const { exerciseId } = window._durationEditTarget;
+  const input = document.getElementById('duration-edit-input');
+  const dur = Math.max(1, parseInt(input?.value) || 30);
+  window._durationEditTarget = null;
+  closeModal();
+
+  const sets = activeWorkout.sets[exerciseId];
+  const workSets = sets.filter(s => !s.isWarmup);
+
+  for (const s of workSets) {
+    if (!s.completed) {
+      s.targetDuration = dur;
+      s.actualDuration = dur;
+      await DB.put('sets', s);
+    }
   }
 
   renderView('workout');
@@ -738,9 +881,12 @@ async function finishWorkout() {
   const start = new Date(activeWorkout.workout.startTime);
   const duration = Math.floor((now - start) / 60000);
 
-  // Calculate total volume
+  // Calculate total volume (skip time-based exercises)
   let totalVolume = 0;
-  for (const sets of Object.values(activeWorkout.sets)) {
+  const exerciseMapForVolume = await DB.getExerciseMap();
+  for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
+    const ex = exerciseMapForVolume[exId];
+    if (isTimeBased(ex)) continue; // Duration doesn't contribute to volume
     for (const s of sets) {
       if (!s.isWarmup && s.completed) {
         totalVolume += s.actualWeight * s.actualReps;
@@ -755,9 +901,11 @@ async function finishWorkout() {
 
   await DB.put('workouts', activeWorkout.workout);
 
-  // Check for PRs
+  // Check for PRs (skip time-based exercises)
   const exerciseMap = await DB.getExerciseMap();
   for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
+    const ex = exerciseMap[exId];
+    if (isTimeBased(ex)) continue; // No weight PRs for duration exercises
     const workSets = sets.filter(s => !s.isWarmup && s.completed);
     for (const s of workSets) {
       const result = await DB.checkAndUpdatePR(
@@ -766,7 +914,6 @@ async function finishWorkout() {
         activeWorkout.workout.id, activeWorkout.workout.date
       );
       if (result.isNewPR) {
-        const ex = exerciseMap[exId];
         showToast(`PR! ${ex?.name || ''}: ${s.actualWeight}x${s.actualReps}`, 'pr');
       }
     }
@@ -832,11 +979,26 @@ async function showWorkoutSummary(workoutData, stalls) {
     const ex = exerciseMap[exId];
     const name = ex?.name || 'Unknown';
     const completed = sets.filter(s => s.completed);
-    const failed = sets.filter(s => !s.completed);
+    const timeBased = isTimeBased(ex);
+    const prSets = sets.filter(s => s.isPR);
+
+    if (timeBased) {
+      const totalDur = completed.reduce((sum, s) => sum + (s.actualDuration || s.targetDuration || 0), 0);
+      return `<div class="summary-exercise">
+        <div class="summary-exercise-header">
+          <span class="summary-exercise-name">${name}</span>
+          <span class="text-muted text-sm">${totalDur} min</span>
+        </div>
+        <div class="summary-exercise-sets">${totalDur} min total</div>
+        <div class="summary-exercise-stats">
+          <span>${completed.length}/${sets.length} sets</span>
+        </div>
+      </div>`;
+    }
+
     const maxWeight = Math.max(...sets.map(s => s.actualWeight), 0);
     const volume = completed.reduce((sum, s) => sum + s.actualWeight * s.actualReps, 0);
     const repsStr = sets.map(s => s.completed ? s.actualReps : `${s.actualReps}F`).join(', ');
-    const prSets = sets.filter(s => s.isPR);
 
     return `<div class="summary-exercise">
       <div class="summary-exercise-header">
@@ -1087,6 +1249,10 @@ async function renderHistory(el) {
     const exerciseLines = Object.entries(byEx).map(([exId, exSets]) => {
       const ex = exerciseMap[exId];
       const name = ex?.name || 'Unknown';
+      if (isTimeBased(ex)) {
+        const totalDur = exSets.filter(s => s.completed).reduce((sum, s) => sum + (s.actualDuration || s.targetDuration || 0), 0);
+        return `<div class="text-sm">${name}: ${totalDur} min</div>`;
+      }
       const reps = exSets.map(s => `${s.actualWeight}x${s.actualReps}${s.completed ? '' : '(F)'}`).join(', ');
       return `<div class="text-sm">${name}: ${reps}</div>`;
     }).join('');
@@ -1335,7 +1501,10 @@ async function renderProgramEditor() {
         <div class="day-card-header">
           <input class="day-card-name" value="${day.name}"
             onchange="editingProgram.days[${di}].name = this.value">
-          ${p.days.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveDay(${di})">&#10005;</button>` : ''}
+          <div class="flex items-center gap-8">
+            <button class="btn btn-ghost btn-sm" onclick="editorCopyDay(${di})" title="Copy day">&#128203;</button>
+            ${p.days.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveDay(${di})">&#10005;</button>` : ''}
+          </div>
         </div>
 
         ${(day.sections || []).map((sec, si) => `
@@ -1354,10 +1523,13 @@ async function renderProgramEditor() {
             <div class="section-exercises">
               ${(sec.exercises || []).map((ex, ei) => {
                 const exercise = exerciseMap[ex.exerciseId];
+                const configLabel = isTimeBased(exercise)
+                  ? `${ex.duration || exercise?.defaultDuration || 30} min`
+                  : `${ex.sets}x${ex.reps}`;
                 return `<div class="section-exercise-row">
                   <span class="section-exercise-name">${exercise?.name || 'Unknown'}</span>
                   <div class="flex items-center gap-8">
-                    <span class="section-exercise-config">${ex.sets}x${ex.reps}</span>
+                    <span class="section-exercise-config">${configLabel}</span>
                     <button class="btn btn-ghost btn-sm" onclick="editorRemoveExercise(${di}, ${si}, ${ei})">&#10005;</button>
                   </div>
                 </div>`;
@@ -1432,6 +1604,21 @@ function editorAddDay() {
     sections: [{ id: `sec_${Date.now()}`, name: 'Main', type: 'straight', exercises: [], rounds: 1, restBetweenRounds: 0, timer: null }]
   });
   renderProgramEditor();
+}
+
+function editorCopyDay(dayIdx) {
+  const source = editingProgram.days[dayIdx];
+  const n = editingProgram.days.length + 1;
+  const copy = JSON.parse(JSON.stringify(source));
+  copy.id = `day${n}_${Date.now()}`;
+  copy.name = `${source.name} (Copy)`;
+  // Give new IDs to sections
+  for (const sec of (copy.sections || [])) {
+    sec.id = `sec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  }
+  editingProgram.days.splice(dayIdx + 1, 0, copy);
+  renderProgramEditor();
+  showToast('Day copied', 'success');
 }
 
 function editorRemoveDay(dayIdx) {
@@ -1531,12 +1718,16 @@ async function editorAddExercise(dayIdx, secIdx) {
     <div id="picker-exercise-list">
       ${Object.entries(categories).map(([cat, exs]) => `
         <div class="section-title picker-cat">${cat.toUpperCase()}</div>
-        ${exs.map(e => `
+        ${exs.map(e => {
+          const subLabel = e.trackingType === 'time'
+            ? `${e.defaultDuration || 30} min`
+            : `${e.defaultSets}x${e.defaultReps}`;
+          return `
           <div class="picker-item" data-name="${e.name.toLowerCase()}" onclick="pickExercise(${e.id}, ${e.defaultSets}, ${e.defaultReps})">
             <div class="picker-item-name">${e.name}</div>
-            <div class="picker-item-sub">${e.defaultSets}x${e.defaultReps} &middot; ${e.muscleGroups.join(', ')}</div>
-          </div>
-        `).join('')}
+            <div class="picker-item-sub">${subLabel} &middot; ${e.muscleGroups.join(', ')}</div>
+          </div>`;
+        }).join('')}
       `).join('')}
     </div>
   `);
@@ -1558,31 +1749,54 @@ function filterPickerExercises(query) {
   });
 }
 
-function pickExercise(exerciseId, defaultSets, defaultReps) {
+async function pickExercise(exerciseId, defaultSets, defaultReps) {
+  const exerciseMap = await DB.getExerciseMap();
+  const exercise = exerciseMap[exerciseId];
+  const timeBased = isTimeBased(exercise);
+  const dur = exercise?.defaultDuration || 30;
   const modal = document.querySelector('.modal-sheet');
-  modal.innerHTML = `
-    <div class="modal-handle"></div>
-    <div class="modal-title">Configure Exercise</div>
-    <div class="flex gap-12">
-      <div class="form-group flex-1">
-        <label class="form-label">Sets</label>
-        <input class="form-input" type="number" id="picker-sets" value="${defaultSets}" min="1" max="20">
+
+  if (timeBased) {
+    modal.innerHTML = `
+      <div class="modal-handle"></div>
+      <div class="modal-title">Configure Exercise</div>
+      <div class="form-group">
+        <label class="form-label">Duration (min)</label>
+        <input class="form-input" type="number" id="picker-duration" value="${dur}" min="1" max="999">
       </div>
-      <div class="form-group flex-1">
-        <label class="form-label">Reps</label>
-        <input class="form-input" type="number" id="picker-reps" value="${defaultReps}" min="1" max="100">
+      <input type="hidden" id="picker-sets" value="${defaultSets}">
+      <input type="hidden" id="picker-reps" value="0">
+      <button class="btn btn-primary mt-16" onclick="confirmExercisePick(${exerciseId})">Add</button>
+    `;
+  } else {
+    modal.innerHTML = `
+      <div class="modal-handle"></div>
+      <div class="modal-title">Configure Exercise</div>
+      <div class="flex gap-12">
+        <div class="form-group flex-1">
+          <label class="form-label">Sets</label>
+          <input class="form-input" type="number" id="picker-sets" value="${defaultSets}" min="1" max="20">
+        </div>
+        <div class="form-group flex-1">
+          <label class="form-label">Reps</label>
+          <input class="form-input" type="number" id="picker-reps" value="${defaultReps}" min="1" max="100">
+        </div>
       </div>
-    </div>
-    <button class="btn btn-primary mt-16" onclick="confirmExercisePick(${exerciseId})">Add</button>
-  `;
+      <button class="btn btn-primary mt-16" onclick="confirmExercisePick(${exerciseId})">Add</button>
+    `;
+  }
 }
 
 function confirmExercisePick(exerciseId) {
   const sets = parseInt(document.getElementById('picker-sets').value) || 3;
   const reps = parseInt(document.getElementById('picker-reps').value) || 5;
+  const durationEl = document.getElementById('picker-duration');
+  const duration = durationEl ? parseInt(durationEl.value) || 30 : null;
   const { dayIdx, secIdx } = window._pickerTarget;
   const section = editingProgram.days[dayIdx].sections[secIdx];
-  section.exercises.push({ exerciseId, sets, reps, order: section.exercises.length + 1 });
+  const entry = { exerciseId, sets, reps, order: section.exercises.length + 1 };
+  if (duration !== null) entry.duration = duration;
+  section.exercises.push(entry);
   closeModal();
   renderProgramEditor();
 }
@@ -1639,7 +1853,7 @@ async function renderMore(el) {
     </div>
 
     <div class="text-center mt-24 text-muted text-sm">
-      IronLog v2.0.0<br>
+      IronLog v2.1.0<br>
       Built for the iron.
     </div>
   `;
@@ -1743,14 +1957,18 @@ function renderExerciseList(exercises) {
 
   return Object.entries(categories).map(([cat, exs]) => `
     <div class="section-title">${cat.toUpperCase()}</div>
-    ${exs.map(e => `
+    ${exs.map(e => {
+      const configLabel = e.trackingType === 'time'
+        ? `${e.defaultDuration || 30} min`
+        : `${e.defaultSets}x${e.defaultReps}`;
+      return `
       <div class="list-item" data-name="${e.name.toLowerCase()}">
         <div class="list-item-text">
           <div class="list-item-title">${e.name} ${e.isCustom ? '<span class="text-muted text-sm">(custom)</span>' : ''}</div>
-          <div class="list-item-sub">${e.defaultSets}x${e.defaultReps} &middot; ${e.muscleGroups.join(', ')}</div>
+          <div class="list-item-sub">${configLabel} &middot; ${e.muscleGroups.join(', ')}</div>
         </div>
-      </div>
-    `).join('')}
+      </div>`;
+    }).join('')}
   `).join('');
 }
 
@@ -1800,14 +2018,19 @@ async function createExercise() {
 
   if (!name) { showToast('Enter a name', 'error'); return; }
 
-  await DB.add('exercises', {
+  const trackingType = (category === 'cardio' || category === 'outdoor') ? 'time'
+    : category === 'bodyweight' ? 'reps_only' : 'weight';
+  const exData = {
     name, category, muscleGroups: [],
     isBarbell: category === 'barbell',
     barbellWeight: category === 'barbell' ? 45 : 0,
     defaultSets, defaultReps,
     defaultRestSec: category === 'barbell' ? 180 : 90,
-    incrementLbs: 5, isCustom: true, isActive: true
-  });
+    incrementLbs: trackingType === 'weight' ? 5 : 0,
+    trackingType, isCustom: true, isActive: true
+  };
+  if (trackingType === 'time') exData.defaultDuration = 30;
+  await DB.add('exercises', exData);
 
   DB.invalidateExerciseCache();
   closeModal();
@@ -2073,6 +2296,7 @@ window.exitProgramEditor = exitProgramEditor;
 window.saveProgramEditor = saveProgramEditor;
 window.editorDeleteProgram = editorDeleteProgram;
 window.editorAddDay = editorAddDay;
+window.editorCopyDay = editorCopyDay;
 window.editorRemoveDay = editorRemoveDay;
 window.editorAddSection = editorAddSection;
 window.editorRemoveSection = editorRemoveSection;
@@ -2109,4 +2333,8 @@ window.showWorkoutSummary = showWorkoutSummary;
 window.requestAIAnalysis = requestAIAnalysis;
 window.closeSummary = closeSummary;
 window.adjustEditWeight = adjustEditWeight;
+window.onWeightInputChange = onWeightInputChange;
 window.confirmWeightEdit = confirmWeightEdit;
+window.editDuration = editDuration;
+window.adjustEditDuration = adjustEditDuration;
+window.confirmDurationEdit = confirmDurationEdit;
