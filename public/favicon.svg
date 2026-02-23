@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0a0a0f"/>
+  <!-- Barbell -->
+  <rect x="80" y="216" width="80" height="80" rx="8" fill="#e94560"/>
+  <rect x="60" y="196" width="40" height="120" rx="6" fill="#e94560"/>
+  <rect x="352" y="216" width="80" height="80" rx="8" fill="#e94560"/>
+  <rect x="412" y="196" width="40" height="120" rx="6" fill="#e94560"/>
+  <rect x="160" y="246" width="192" height="20" rx="4" fill="#888"/>
+  <!-- Text -->
+  <text x="256" y="420" text-anchor="middle" font-family="system-ui" font-weight="900" font-size="80" fill="#eee">IRON</text>
+</svg>

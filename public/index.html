@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="IronLog - Strength Training Tracker">
+  <title>IronLog</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div>
+      <div class="header-title" id="header-title">Workout</div>
+    </div>
+    <button class="header-action" onclick="openPlateCalc()" title="Plate Calculator">
+      &#9878;
+    </button>
+  </header>
+
+  <!-- Main Content -->
+  <main class="content" id="content">
+    <!-- Views render here -->
+  </main>
+
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-view="workout">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="2" y="10" width="4" height="4" rx="0.5"/>
+        <rect x="18" y="10" width="4" height="4" rx="0.5"/>
+        <line x1="6" y1="12" x2="18" y2="12"/>
+        <rect x="1" y="9" width="2" height="6" rx="0.5"/>
+        <rect x="21" y="9" width="2" height="6" rx="0.5"/>
+      </svg>
+      Workout
+    </button>
+    <button class="nav-item" data-view="history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+      History
+    </button>
+    <button class="nav-item" data-view="progress">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      Progress
+    </button>
+    <button class="nav-item" data-view="programs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Programs
+    </button>
+    <button class="nav-item" data-view="more">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="5" r="1.5"/>
+        <circle cx="12" cy="12" r="1.5"/>
+        <circle cx="12" cy="19" r="1.5"/>
+      </svg>
+      More
+    </button>
+  </nav>
+
+  <!-- Rest Timer Overlay -->
+  <div class="timer-overlay hidden" id="timer-overlay">
+    <div class="timer-label" id="timer-exercise-label">Rest</div>
+    <div class="timer-ring">
+      <svg viewBox="0 0 220 220">
+        <circle class="timer-ring-bg" cx="110" cy="110" r="100"/>
+        <circle class="timer-ring-progress" id="timer-ring-progress" cx="110" cy="110" r="100"
+          stroke-dasharray="628.32" stroke-dashoffset="0"/>
+      </svg>
+      <div class="timer-time" id="timer-time">3:00</div>
+    </div>
+    <div class="timer-controls">
+      <button class="timer-adjust" onclick="timerAdjust(-30)">-30</button>
+      <button class="timer-skip" onclick="timerSkip()">SKIP</button>
+      <button class="timer-adjust" onclick="timerAdjust(30)">+30</button>
+    </div>
+  </div>
+
+  <!-- Plate Calculator Overlay -->
+  <div class="plate-overlay hidden" id="plate-overlay">
+    <button class="plate-close" onclick="closePlateCalc()">&#10005;</button>
+    <h2 style="font-size:20px;font-weight:800;margin-bottom:24px">Plate Calculator</h2>
+    <div class="plate-input-row">
+      <input class="plate-input" id="plate-weight-input" type="number" placeholder="Weight"
+        oninput="updatePlateCalc()">
+      <span style="font-size:18px;color:var(--text-muted)">lbs</span>
+    </div>
+    <div class="plate-result" id="plate-result"></div>
+    <div id="plate-visual-container"></div>
+  </div>
+
+  <!-- Modal Backdrop -->
+  <div class="modal-backdrop hidden" id="modal-backdrop"></div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/js/db.js"></script>
+  <script src="/js/timer.js"></script>
+  <script src="/js/plates.js"></script>
+  <script src="/js/programs.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/ai.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
