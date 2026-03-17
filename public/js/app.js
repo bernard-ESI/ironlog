@@ -8,6 +8,7 @@ let wakeLock = null;
 let selectedProgram = null;
 let activeRepStrip = null;   // setId with rep strip open
 let selectedDayOverride = null; // user-selected day for alternating programs
+let historyCalendarMonth = new Date(); // tracks which month is displayed in history calendar
 
 // ── Tracking Type Helpers ─────────────────────────────────
 function isTimeBased(exercise) { return exercise?.trackingType === 'time'; }
@@ -78,7 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=12').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=13').catch(() => {});
   }
 
   // Re-acquire wake lock when page becomes visible again
@@ -198,6 +199,10 @@ async function renderWorkout(el) {
   const lastWorkout = await DB.getLastWorkoutForDay(selectedProgram.id, activeDay.id);
   const lastDate = lastWorkout ? new Date(lastWorkout.date).toLocaleDateString() : 'Never';
 
+  // Workout counter
+  const completedCount = await getWorkoutCount(selectedProgram.id);
+  const nextWorkoutNum = completedCount + 1;
+
   // Day selector for alternating programs
   const showDaySelector = selectedProgram.alternating && selectedProgram.days.length > 1;
   const daySelectorHtml = showDaySelector ? `
@@ -213,7 +218,7 @@ async function renderWorkout(el) {
   el.innerHTML = `
     <div class="workout-status">
       <div class="workout-status-icon">&#127947;</div>
-      <div class="workout-status-title">${activeDay.name}</div>
+      <div class="workout-status-title">Workout #${nextWorkoutNum} - ${activeDay.name}</div>
       <div class="workout-status-sub">${selectedProgram.name} &middot; Last: ${lastDate}</div>
     </div>
 
@@ -411,6 +416,11 @@ function startWorkoutTimer() {
   }, 1000);
 }
 
+async function getWorkoutCount(programId) {
+  const workouts = await DB.getWorkoutsByProgram(programId);
+  return workouts.filter(w => w.status === 'completed').length;
+}
+
 async function renderActiveWorkout(el) {
   const exerciseMap = await DB.getExerciseMap();
 
@@ -423,11 +433,15 @@ async function renderActiveWorkout(el) {
   const start = new Date(activeWorkout.workout.startTime);
   const elapsed = Math.floor((Date.now() - start.getTime()) / 1000);
 
+  // Workout counter: completed + 1 (current)
+  const completedCount = await getWorkoutCount(activeWorkout.workout.programId);
+  const workoutNumber = completedCount + 1;
+
   startWorkoutTimer();
 
   el.innerHTML = `
     <div class="workout-active-bar">
-      <span class="text-sm font-bold">IN PROGRESS</span>
+      <span class="text-sm font-bold">WORKOUT #${workoutNumber}</span>
       <span class="workout-timer" id="workout-elapsed">${formatTime(elapsed)}</span>
     </div>
 
@@ -1565,6 +1579,65 @@ async function updatePlateCalc() {
   document.getElementById('plate-visual-container').innerHTML = renderPlateVisual(result.perSide);
 }
 
+// ── HISTORY CALENDAR ──────────────────────────────────────
+function renderCalendarGrid(workoutDates) {
+  const year = historyCalendarMonth.getFullYear();
+  const month = historyCalendarMonth.getMonth();
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const monthName = new Date(year, month).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  // First day of month and total days
+  const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // Build set of workout dates for quick lookup
+  const workoutDateSet = new Set(workoutDates);
+
+  let cells = '';
+  // Empty cells before first day
+  for (let i = 0; i < firstDay; i++) {
+    cells += '<div class="calendar-day empty"></div>';
+  }
+  // Day cells
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const isToday = dateStr === todayStr;
+    const hasWorkout = workoutDateSet.has(dateStr);
+    const todayClass = isToday ? ' calendar-today' : '';
+    const dot = hasWorkout ? '<span class="calendar-dot"></span>' : '';
+    cells += `<div class="calendar-day${todayClass}"><span>${d}</span>${dot}</div>`;
+  }
+
+  return `<div class="calendar-container">
+    <div class="calendar-nav">
+      <button class="calendar-nav-btn" onclick="calendarPrev()">&larr;</button>
+      <span class="calendar-month-label">${monthName}</span>
+      <button class="calendar-nav-btn" onclick="calendarNext()">&rarr;</button>
+    </div>
+    <div class="calendar-grid">
+      <div class="calendar-header">S</div>
+      <div class="calendar-header">M</div>
+      <div class="calendar-header">T</div>
+      <div class="calendar-header">W</div>
+      <div class="calendar-header">T</div>
+      <div class="calendar-header">F</div>
+      <div class="calendar-header">S</div>
+      ${cells}
+    </div>
+  </div>`;
+}
+
+function calendarPrev() {
+  historyCalendarMonth = new Date(historyCalendarMonth.getFullYear(), historyCalendarMonth.getMonth() - 1, 1);
+  renderView('history');
+}
+
+function calendarNext() {
+  historyCalendarMonth = new Date(historyCalendarMonth.getFullYear(), historyCalendarMonth.getMonth() + 1, 1);
+  renderView('history');
+}
+
 // ── HISTORY VIEW ──────────────────────────────────────────
 async function renderHistory(el) {
   const workouts = await DB.getRecentWorkouts(50);
@@ -1573,12 +1646,18 @@ async function renderHistory(el) {
   const programMap = {};
   for (const p of programs) programMap[p.id] = p;
 
+  // Collect all completed workout dates for calendar
+  const allWorkouts = await DB.getAll('workouts');
+  const workoutDates = allWorkouts.filter(w => w.status === 'completed').map(w => w.date);
+
   if (workouts.length === 0) {
-    el.innerHTML = `<div class="empty-state">
-      <div class="empty-state-icon">&#128196;</div>
-      <div class="empty-state-title">No Workouts Yet</div>
-      <p class="text-muted">Complete your first workout to see history.</p>
-    </div>`;
+    el.innerHTML = `
+      ${renderCalendarGrid(workoutDates)}
+      <div class="empty-state">
+        <div class="empty-state-icon">&#128196;</div>
+        <div class="empty-state-title">No Workouts Yet</div>
+        <p class="text-muted">Complete your first workout to see history.</p>
+      </div>`;
     return;
   }
 
@@ -1635,7 +1714,7 @@ async function renderHistory(el) {
     </div>`);
   }
 
-  el.innerHTML = cards.join('');
+  el.innerHTML = renderCalendarGrid(workoutDates) + cards.join('');
 }
 
 function toggleHistoryDetail(card) {
@@ -2708,3 +2787,6 @@ window.adjustWarmupWeight = adjustWarmupWeight;
 window.onWarmupWeightChange = onWarmupWeightChange;
 window.confirmWarmupWeight = confirmWarmupWeight;
 window.sendTimerNotification = sendTimerNotification;
+window.getWorkoutCount = getWorkoutCount;
+window.calendarPrev = calendarPrev;
+window.calendarNext = calendarNext;

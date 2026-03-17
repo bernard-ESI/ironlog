@@ -239,45 +239,49 @@ class WorkoutTimer extends RestTimer {
   }
 }
 
-// Smart rest time calculator
+// Adaptive rest time calculator (StrongLifts-style tiers)
 function calculateRestTime(exercise, setData, previousSetData) {
-  let base = exercise.defaultRestSec || 180;
+  // Warmup sets always get 60s (handled upstream, but guard here too)
+  if (setData.isWarmup) return 60;
 
-  // Compound vs isolation base
-  if (exercise.category === 'barbell') {
-    base = 180; // 3 min for compounds
-  } else if (exercise.category === 'dumbbell' || exercise.category === 'machine') {
-    base = 90;
-  } else if (exercise.category === 'bodyweight') {
-    base = 60;
-  }
-
-  // RPE adjustment
-  if (setData.rpe) {
-    if (setData.rpe <= 7) base *= 0.7;
-    else if (setData.rpe === 8) { /* no change */ }
-    else if (setData.rpe === 9) base *= 1.3;
-    else if (setData.rpe >= 10) base *= 1.6;
-  }
-
-  // Missed reps
+  // Failed set (partial reps) -> 5 min
   if (setData.targetReps && setData.actualReps < setData.targetReps) {
-    const missed = setData.targetReps - setData.actualReps;
-    base += missed * 30;
+    return 300;
   }
 
-  // Later sets need more rest
-  if (exercise.category === 'barbell' && setData.setNumber > 3) {
-    base += (setData.setNumber - 3) * 15;
+  // Determine recent max from previous set chain to gauge intensity
+  // Heavy weight (>80% of recent max) -> 3 min
+  // Moderate weight -> 2 min
+  // For barbell compounds, use the exercise's default rest as a signal
+  if (exercise.category === 'barbell') {
+    // If RPE is explicitly set, use that as intensity proxy
+    if (setData.rpe && setData.rpe >= 9) return 300;
+    if (setData.rpe && setData.rpe >= 8) return 180;
+
+    // Previous set failed -> treat current as heavy
+    if (previousSetData && previousSetData.actualReps < previousSetData.targetReps) {
+      return 300;
+    }
+
+    // Later sets in a 5x5 are heavier-feeling -> 3 min
+    if (setData.setNumber >= 3) return 180;
+
+    // Early sets at work weight -> 2 min
+    return 120;
   }
 
-  // Previous set also failed
-  if (previousSetData && previousSetData.actualReps < previousSetData.targetReps) {
-    base += 30;
+  // Non-barbell exercises: shorter rest
+  if (exercise.category === 'dumbbell' || exercise.category === 'machine') {
+    if (setData.rpe && setData.rpe >= 9) return 180;
+    return 90;
   }
 
-  // Clamp
-  return Math.max(30, Math.min(600, Math.round(base)));
+  if (exercise.category === 'bodyweight') {
+    return 60;
+  }
+
+  // Fallback
+  return exercise.defaultRestSec || 120;
 }
 
 function formatTime(seconds) {

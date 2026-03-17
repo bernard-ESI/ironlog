@@ -209,9 +209,13 @@ async function seedDefaults() {
   DB.invalidateExerciseCache();
   const exerciseMap = await DB.getExerciseMap();
 
-  // Add Starting Strength program
+  // Add Starting Strength program (default)
   const ssProgram = createSSNLP(exerciseMap);
   await DB.add('programs', ssProgram);
+
+  // Add StrongLifts 5x5 program (secondary)
+  const sl5x5Program = createSL5x5(exerciseMap);
+  await DB.add('programs', sl5x5Program);
 
   // Set default settings
   await DB.saveSettings({
@@ -242,8 +246,72 @@ function getDayExercises(day) {
   return day.exercises || [];
 }
 
+// StrongLifts 5x5 program template
+function createSL5x5(exerciseMap) {
+  const find = (name) => {
+    for (const [id, ex] of Object.entries(exerciseMap)) {
+      if (ex.name === name) return Number(id);
+    }
+    return null;
+  };
+
+  return {
+    name: 'StrongLifts 5x5',
+    type: 'strength',
+    isDefault: false,
+    daysPerWeek: 3,
+    alternating: true,
+    days: [
+      {
+        id: 'A',
+        name: 'Workout A',
+        sections: [{
+          id: 'main',
+          name: 'Main Lifts',
+          type: 'straight',
+          exercises: [
+            { exerciseId: find('Squat'), sets: 5, reps: 5, order: 1 },
+            { exerciseId: find('Bench Press'), sets: 5, reps: 5, order: 2 },
+            { exerciseId: find('Barbell Row'), sets: 5, reps: 5, order: 3 }
+          ],
+          rounds: 1,
+          restBetweenRounds: 0,
+          timer: null
+        }]
+      },
+      {
+        id: 'B',
+        name: 'Workout B',
+        sections: [{
+          id: 'main',
+          name: 'Main Lifts',
+          type: 'straight',
+          exercises: [
+            { exerciseId: find('Squat'), sets: 5, reps: 5, order: 1 },
+            { exerciseId: find('Overhead Press'), sets: 5, reps: 5, order: 2 },
+            { exerciseId: find('Deadlift'), sets: 1, reps: 5, order: 3 }
+          ],
+          rounds: 1,
+          restBetweenRounds: 0,
+          timer: null
+        }]
+      }
+    ],
+    progression: {
+      upperIncrement: 5,
+      lowerIncrement: 5,
+      deadliftIncrement: 10,
+      failureRetries: 3,
+      deloadPercent: 10,
+      maxDeloads: 3
+    },
+    isCustom: false
+  };
+}
+
 window.DEFAULT_EXERCISES = DEFAULT_EXERCISES;
 window.Progression = Progression;
 window.seedDefaults = seedDefaults;
 window.createSSNLP = createSSNLP;
+window.createSL5x5 = createSL5x5;
 window.getDayExercises = getDayExercises;

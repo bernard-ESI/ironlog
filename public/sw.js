@@ -1,6 +1,6 @@
 // IronLog Service Worker - Cache-first for app shell, network-first for API
 
-const CACHE_NAME = 'ironlog-v12';
+const CACHE_NAME = 'ironlog-v13';
 const APP_SHELL = [
   '/',
   '/index.html',
