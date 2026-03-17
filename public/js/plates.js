@@ -54,7 +54,7 @@ function renderPlateVisual(plates, barWeight = DEFAULT_BAR_WEIGHT) {
     `<div class="plate" style="background:${PLATE_COLORS[p] || '#888'};height:${20 + p * 1.2}px" title="${p} lbs">${p}</div>`
   ).join('');
 
-  const rightPlates = [...plates].reverse().map(p =>
+  const rightPlates = plates.map(p =>
     `<div class="plate" style="background:${PLATE_COLORS[p] || '#888'};height:${20 + p * 1.2}px" title="${p} lbs">${p}</div>`
   ).join('');
 
@@ -79,6 +79,13 @@ function formatPlateBreakdown(result) {
   return parts.join(' + ') + ' per side';
 }
 
+// Round warmup weight so per-side load is a multiple of 5 (no 2.5lb plates)
+function roundWarmupWeight(weight, barWeight = 45) {
+  const perSide = (weight - barWeight) / 2;
+  const roundedPerSide = Math.round(perSide / 5) * 5;
+  return Math.max(barWeight, barWeight + roundedPerSide * 2);
+}
+
 // Generate warmup scheme for Starting Strength
 function generateWarmups(workWeight, barWeight = 45) {
   const warmups = [];
@@ -90,19 +97,19 @@ function generateWarmups(workWeight, barWeight = 45) {
   if (workWeight > barWeight) {
     if (workWeight > barWeight * 1.5) {
       // 40% x5
-      const w40 = roundToNearest(workWeight * 0.4, 5);
+      const w40 = roundWarmupWeight(roundToNearest(workWeight * 0.4, 5), barWeight);
       if (w40 > barWeight) warmups.push({ weight: w40, reps: 5, label: '40%' });
     }
 
     if (workWeight > barWeight * 2) {
       // 60% x3
-      const w60 = roundToNearest(workWeight * 0.6, 5);
+      const w60 = roundWarmupWeight(roundToNearest(workWeight * 0.6, 5), barWeight);
       warmups.push({ weight: w60, reps: 3, label: '60%' });
     }
 
     if (workWeight > barWeight * 2.5) {
       // 80% x2
-      const w80 = roundToNearest(workWeight * 0.8, 5);
+      const w80 = roundWarmupWeight(roundToNearest(workWeight * 0.8, 5), barWeight);
       warmups.push({ weight: w80, reps: 2, label: '80%' });
     }
   }
@@ -119,4 +126,5 @@ window.renderPlateVisual = renderPlateVisual;
 window.formatPlateBreakdown = formatPlateBreakdown;
 window.generateWarmups = generateWarmups;
 window.roundToNearest = roundToNearest;
+window.roundWarmupWeight = roundWarmupWeight;
 window.PLATE_COLORS = PLATE_COLORS;

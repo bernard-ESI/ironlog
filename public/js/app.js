@@ -7,6 +7,7 @@ let restTimer = null;          // RestTimer instance
 let wakeLock = null;
 let selectedProgram = null;
 let activeRepStrip = null;   // setId with rep strip open
+let selectedDayOverride = null; // user-selected day for alternating programs
 
 // ── Tracking Type Helpers ─────────────────────────────────
 function isTimeBased(exercise) { return exercise?.trackingType === 'time'; }
@@ -77,7 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=11').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=12').catch(() => {});
   }
 
   // Re-acquire wake lock when page becomes visible again
@@ -178,11 +179,14 @@ async function renderWorkout(el) {
     return;
   }
 
-  const nextDay = await Progression.getNextDay(selectedProgram);
+  const suggestedDay = await Progression.getNextDay(selectedProgram);
+  const activeDay = selectedDayOverride
+    ? selectedProgram.days.find(d => d.id === selectedDayOverride) || suggestedDay
+    : suggestedDay;
   const exerciseMap = await DB.getExerciseMap();
   const exerciseWeights = {};
 
-  for (const ex of getDayExercises(nextDay)) {
+  for (const ex of getDayExercises(activeDay)) {
     if (ex.exerciseId) {
       const exercise = exerciseMap[ex.exerciseId];
       if (exercise) {
@@ -191,17 +195,31 @@ async function renderWorkout(el) {
     }
   }
 
-  const lastWorkout = await DB.getLastWorkoutForDay(selectedProgram.id, nextDay.id);
+  const lastWorkout = await DB.getLastWorkoutForDay(selectedProgram.id, activeDay.id);
   const lastDate = lastWorkout ? new Date(lastWorkout.date).toLocaleDateString() : 'Never';
+
+  // Day selector for alternating programs
+  const showDaySelector = selectedProgram.alternating && selectedProgram.days.length > 1;
+  const daySelectorHtml = showDaySelector ? `
+    <div class="day-selector">
+      ${selectedProgram.days.map(d => `
+        <button class="day-selector-btn ${d.id === activeDay.id ? 'active' : ''}"
+          onclick="selectWorkoutDay('${d.id}')">${d.name}</button>
+      `).join('')}
+    </div>
+    ${!selectedDayOverride ? '<div class="day-selector-hint">Auto-suggested based on last workout</div>' : ''}
+  ` : '';
 
   el.innerHTML = `
     <div class="workout-status">
       <div class="workout-status-icon">&#127947;</div>
-      <div class="workout-status-title">${nextDay.name}</div>
+      <div class="workout-status-title">${activeDay.name}</div>
       <div class="workout-status-sub">${selectedProgram.name} &middot; Last: ${lastDate}</div>
     </div>
 
-    ${getDayExercises(nextDay).map(ex => {
+    ${daySelectorHtml}
+
+    ${getDayExercises(activeDay).map(ex => {
       const exercise = exerciseMap[ex.exerciseId];
       if (!exercise) return '';
       const weight = exerciseWeights[ex.exerciseId] || exercise.barbellWeight || 0;
@@ -220,10 +238,15 @@ async function renderWorkout(el) {
       </div>`;
     }).join('')}
 
-    <button class="btn btn-primary mt-16" onclick="startWorkout('${nextDay.id}')">
+    <button class="btn btn-primary mt-16" onclick="startWorkout('${activeDay.id}')">
       START WORKOUT
     </button>
   `;
+}
+
+function selectWorkoutDay(dayId) {
+  selectedDayOverride = dayId;
+  renderView('workout');
 }
 
 async function startWorkout(dayId) {
@@ -270,6 +293,7 @@ async function beginWorkout(dayId, skipped) {
   const day = selectedProgram.days.find(d => d.id === dayId);
   if (!day) return;
 
+  selectedDayOverride = null;
   await requestWakeLock();
   await requestNotificationPermission();
 
@@ -902,16 +926,25 @@ async function confirmWeightEdit() {
     }
   }
 
-  // Regenerate warmup sets for new weight
+  // Regenerate warmup sets for new weight, preserving completed warmups
   if (exercise && exercise.isBarbell) {
-    for (const s of oldWarmups) {
+    const completedWarmups = oldWarmups.filter(s => s.completed);
+    const uncompletedWarmups = oldWarmups.filter(s => !s.completed);
+
+    // Only delete uncompleted warmups
+    for (const s of uncompletedWarmups) {
       await DB.delete('sets', s.id);
     }
 
+    // Generate new warmups for the new weight
     const newWarmups = generateWarmups(w, exercise.barbellWeight || 45);
     const newWarmupSets = [];
-    let order = 0;
+    // Start order after completed warmups
+    let order = completedWarmups.length;
     for (const wu of newWarmups) {
+      // Skip if a completed warmup already covers this weight
+      const alreadyDone = completedWarmups.some(cw => cw.targetWeight === wu.weight);
+      if (alreadyDone) continue;
       const s = {
         workoutId: activeWorkout.workout.id, exerciseId: Number(exerciseId),
         setNumber: 0, targetWeight: wu.weight, targetReps: wu.reps,
@@ -923,7 +956,7 @@ async function confirmWeightEdit() {
       newWarmupSets.push(s);
     }
 
-    activeWorkout.sets[exerciseId] = [...newWarmupSets, ...workSets];
+    activeWorkout.sets[exerciseId] = [...completedWarmups, ...newWarmupSets, ...workSets];
   }
 
   renderView('workout');
@@ -2655,6 +2688,7 @@ window.toggleRepStrip = toggleRepStrip;
 window.setActualReps = setActualReps;
 window.timerPause = timerPause;
 window.beginWorkout = beginWorkout;
+window.selectWorkoutDay = selectWorkoutDay;
 window.selectReadiness = selectReadiness;
 window.showWorkoutSummary = showWorkoutSummary;
 window.requestAIAnalysis = requestAIAnalysis;
