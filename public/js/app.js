@@ -77,8 +77,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=10').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=11').catch(() => {});
   }
+
+  // Re-acquire wake lock when page becomes visible again
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && activeWorkout) {
+      await requestWakeLock();
+    }
+  });
 });
 
 // ── Router ────────────────────────────────────────────────
@@ -126,13 +133,33 @@ function showToast(msg, type = '') {
 async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator) {
+      // Release existing lock before requesting new one
+      if (wakeLock) { try { await wakeLock.release(); } catch(e) {} }
       wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
     }
   } catch (e) {}
 }
 
 function releaseWakeLock() {
   if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+// ── Notification Permission ───────────────────────────────
+async function requestNotificationPermission() {
+  try {
+    if ('Notification' in window && Notification.permission === 'default') {
+      await Notification.requestPermission();
+    }
+  } catch (e) {}
+}
+
+function sendTimerNotification(title, body) {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/favicon.svg', tag: 'ironlog-timer', renotify: true });
+    }
+  } catch (e) {}
 }
 
 // ── WORKOUT VIEW ──────────────────────────────────────────
@@ -244,6 +271,7 @@ async function beginWorkout(dayId, skipped) {
   if (!day) return;
 
   await requestWakeLock();
+  await requestNotificationPermission();
 
   // Gather readiness data
   let readinessData = null;
@@ -551,7 +579,9 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
     const durLabel = isRunning ? 'Running...' : `${dur} min`;
     weightCell = `<span class="set-weight${isRunning ? ' text-primary' : ''}">${durLabel}</span>`;
   } else {
-    weightCell = `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
+    weightCell = isWarmup
+      ? `<span class="set-weight" onclick="editWarmupWeight(${set.id})">${set.actualWeight} lbs</span>`
+      : `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
   }
 
   // Distance badge for cardio/outdoor (inline editable)
@@ -657,9 +687,11 @@ async function toggleSet(setId) {
     set.timestamp = new Date().toISOString();
     await DB.put('sets', set);
 
-    // If set completed, start rest timer (shorter for warmups)
+    // If set completed, start rest timer (including warmups)
     if (set.completed && exercise) {
       if (set.isWarmup) {
+        // Start a short rest timer for warmup sets (60s)
+        showRestTimer(60, exercise.name, { ...set, setNumber: 'W' }, 'rest');
         // Auto-collapse warmups when all done
         autoCollapseWarmup(exId);
       } else {
@@ -894,6 +926,85 @@ async function confirmWeightEdit() {
     activeWorkout.sets[exerciseId] = [...newWarmupSets, ...workSets];
   }
 
+  renderView('workout');
+}
+
+async function editWarmupWeight(setId) {
+  // Find the warmup set
+  let targetSet = null;
+  let targetExId = null;
+  for (const [exId, sets] of Object.entries(activeWorkout.sets)) {
+    targetSet = sets.find(s => s.id === setId);
+    if (targetSet) { targetExId = exId; break; }
+  }
+  if (!targetSet || !targetSet.isWarmup) return;
+
+  const exerciseMap = await DB.getExerciseMap();
+  const exercise = exerciseMap[targetExId];
+  const settings = await DB.getSettings();
+  const currentWeight = targetSet.targetWeight;
+
+  window._warmupEditTarget = { setId, exerciseId: targetExId, currentWeight };
+  const plates = calculatePlates(currentWeight, exercise?.barbellWeight || 45, settings.availablePlates);
+
+  showModal(`
+    <div class="modal-title">Edit Warmup Weight</div>
+    <div class="weight-editor">
+      <input type="number" class="weight-editor-input" id="warmup-weight-input" value="${currentWeight}"
+        min="0" step="5" oninput="onWarmupWeightChange(this.value)">
+      <div class="weight-editor-unit">lbs</div>
+    </div>
+    <div class="weight-editor-controls">
+      <button class="weight-btn" onclick="adjustWarmupWeight(-10)">-10</button>
+      <button class="weight-btn" onclick="adjustWarmupWeight(-5)">-5</button>
+      <button class="weight-btn" onclick="adjustWarmupWeight(-2.5)">-2.5</button>
+      <button class="weight-btn" onclick="adjustWarmupWeight(2.5)">+2.5</button>
+      <button class="weight-btn" onclick="adjustWarmupWeight(5)">+5</button>
+      <button class="weight-btn" onclick="adjustWarmupWeight(10)">+10</button>
+    </div>
+    <div class="weight-editor-plates" id="warmup-weight-plates">${formatPlateBreakdown(plates)}</div>
+    <button class="btn btn-primary mt-16" onclick="confirmWarmupWeight()">Apply</button>
+  `);
+}
+
+function adjustWarmupWeight(delta) {
+  if (!window._warmupEditTarget) return;
+  const newWeight = Math.max(0, window._warmupEditTarget.currentWeight + delta);
+  window._warmupEditTarget.currentWeight = newWeight;
+  const input = document.getElementById('warmup-weight-input');
+  if (input) input.value = newWeight;
+  DB.getSettings().then(settings => {
+    const plates = calculatePlates(newWeight, 45, settings.availablePlates);
+    const el = document.getElementById('warmup-weight-plates');
+    if (el) el.textContent = formatPlateBreakdown(plates);
+  });
+}
+
+function onWarmupWeightChange(value) {
+  if (!window._warmupEditTarget) return;
+  const newWeight = Math.max(0, parseFloat(value) || 0);
+  window._warmupEditTarget.currentWeight = newWeight;
+  DB.getSettings().then(settings => {
+    const plates = calculatePlates(newWeight, 45, settings.availablePlates);
+    const el = document.getElementById('warmup-weight-plates');
+    if (el) el.textContent = formatPlateBreakdown(plates);
+  });
+}
+
+async function confirmWarmupWeight() {
+  if (!window._warmupEditTarget) return;
+  const { setId, exerciseId, currentWeight: w } = window._warmupEditTarget;
+  window._warmupEditTarget = null;
+  closeModal();
+  if (isNaN(w) || w < 0) return;
+
+  const sets = activeWorkout.sets[exerciseId];
+  const set = sets.find(s => s.id === setId);
+  if (!set) return;
+
+  set.targetWeight = w;
+  set.actualWeight = w;
+  await DB.put('sets', set);
   renderView('workout');
 }
 
@@ -2558,3 +2669,8 @@ window.editSetDistance = editSetDistance;
 window.adjustDistanceInput = adjustDistanceInput;
 window.saveSetDistance = saveSetDistance;
 window.showDurationTimer = showDurationTimer;
+window.editWarmupWeight = editWarmupWeight;
+window.adjustWarmupWeight = adjustWarmupWeight;
+window.onWarmupWeightChange = onWarmupWeightChange;
+window.confirmWarmupWeight = confirmWarmupWeight;
+window.sendTimerNotification = sendTimerNotification;

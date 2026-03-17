@@ -307,6 +307,10 @@ html, body {
 
 .set-row.warmup .set-weight {
   color: var(--text-muted);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
 
 .warmup-pct {

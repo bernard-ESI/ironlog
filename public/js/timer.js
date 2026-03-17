@@ -59,10 +59,10 @@ class RestTimer {
       if (type === 'tick') {
         this.remaining = remaining;
         if (this.onTick) this.onTick(remaining, this.totalSeconds);
-        // Warning beep at 5 seconds
-        if (remaining === 5) this._beep(440, 0.1);
-        if (remaining === 3) this._beep(523, 0.1);
-        if (remaining === 1) this._beep(659, 0.1);
+        // Warning beeps at 5, 3, 1 seconds (louder)
+        if (remaining === 5) this._beep(440, 0.15, 0.6);
+        if (remaining === 3) this._beep(523, 0.15, 0.7);
+        if (remaining === 1) this._beep(659, 0.2, 0.8);
       } else if (type === 'done') {
         this.running = false;
         this._completionAlert();
@@ -110,7 +110,7 @@ class RestTimer {
     return this.audioCtx;
   }
 
-  _beep(freq, duration) {
+  _beep(freq, duration, volume) {
     try {
       const ctx = this._getAudioCtx();
       const osc = ctx.createOscillator();
@@ -118,8 +118,8 @@ class RestTimer {
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.frequency.value = freq;
-      osc.type = 'sine';
-      gain.gain.value = 0.3;
+      osc.type = 'square'; // square wave is louder/more noticeable than sine
+      gain.gain.value = volume !== undefined ? volume : 0.5;
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + duration);
@@ -127,17 +127,27 @@ class RestTimer {
   }
 
   async _completionAlert() {
-    // Triple beep
-    const ctx = this._getAudioCtx();
-    for (let i = 0; i < 3; i++) {
-      this._beep(880, 0.2);
-      await new Promise(r => setTimeout(r, 250));
+    // Loud ascending triple beep pattern (repeated twice for unmissable alert)
+    for (let round = 0; round < 2; round++) {
+      this._beep(880, 0.25, 1.0);
+      await new Promise(r => setTimeout(r, 200));
+      this._beep(1100, 0.25, 1.0);
+      await new Promise(r => setTimeout(r, 200));
+      this._beep(1320, 0.35, 1.0);
+      await new Promise(r => setTimeout(r, 350));
     }
 
-    // Vibrate
+    // Aggressive vibration pattern: long-short-long-short-long
     if (navigator.vibrate) {
-      navigator.vibrate([200, 100, 200, 100, 400]);
+      navigator.vibrate([400, 100, 200, 100, 400, 100, 200, 100, 600]);
     }
+
+    // Send notification (buzzes watch if synced)
+    try {
+      if (typeof sendTimerNotification === 'function') {
+        sendTimerNotification('Rest Timer Done', 'Time to lift!');
+      }
+    } catch (e) {}
   }
 
   // Ensure audio context is resumed (must be called from user gesture)
