@@ -79,7 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Register service worker
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=13').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=14').catch(() => {});
   }
 
   // Re-acquire wake lock when page becomes visible again
@@ -619,7 +619,7 @@ function renderSetRow(set, exercise, isWarmup, workWeight) {
   } else {
     weightCell = isWarmup
       ? `<span class="set-weight" onclick="editWarmupWeight(${set.id})">${set.actualWeight} lbs</span>`
-      : `<span class="set-weight" onclick="openPlateCalc(${set.targetWeight})">${set.actualWeight} lbs</span>`;
+      : `<span class="set-weight" onclick="editWeight(${set.exerciseId})">${set.actualWeight} lbs</span>`;
   }
 
   // Distance badge for cardio/outdoor (inline editable)
@@ -885,7 +885,7 @@ async function editWeight(exerciseId) {
       <button class="weight-btn" onclick="adjustEditWeight(10)">+10</button>
     </div>
     <div class="weight-editor-plates" id="weight-edit-plates">${formatPlateBreakdown(plates)}</div>
-    <button class="btn btn-primary mt-16" onclick="confirmWeightEdit()">Apply</button>
+    <button class="btn btn-primary mt-16" onclick="confirmWeightEdit()">Save Weight</button>
   `);
 }
 
@@ -1938,6 +1938,8 @@ async function renderProgramEditor() {
           <input class="day-card-name" value="${day.name}"
             onchange="editingProgram.days[${di}].name = this.value">
           <div class="flex items-center gap-8">
+            ${di > 0 ? `<button class="btn btn-ghost btn-sm" onclick="editorMoveDay(${di}, -1)" title="Move up">&#8593;</button>` : ''}
+            ${di < p.days.length - 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorMoveDay(${di}, 1)" title="Move down">&#8595;</button>` : ''}
             <button class="btn btn-ghost btn-sm" onclick="editorCopyDay(${di})" title="Copy day">&#128203;</button>
             ${p.days.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveDay(${di})">&#10005;</button>` : ''}
           </div>
@@ -1951,6 +1953,8 @@ async function renderProgramEditor() {
                 <span class="section-card-name">${sec.name}</span>
               </div>
               <div class="flex items-center gap-8">
+                ${si > 0 ? `<button class="btn btn-ghost btn-sm" onclick="editorMoveSection(${di}, ${si}, -1)" title="Move up">&#8593;</button>` : ''}
+                ${si < (day.sections || []).length - 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorMoveSection(${di}, ${si}, 1)" title="Move down">&#8595;</button>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="editSection(${di}, ${si})">&#9998;</button>
                 ${(day.sections || []).length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="editorRemoveSection(${di}, ${si})">&#10005;</button>` : ''}
               </div>
@@ -2063,6 +2067,14 @@ function editorRemoveDay(dayIdx) {
   renderProgramEditor();
 }
 
+function editorMoveDay(dayIdx, dir) {
+  const days = editingProgram.days;
+  const newIdx = dayIdx + dir;
+  if (newIdx < 0 || newIdx >= days.length) return;
+  [days[dayIdx], days[newIdx]] = [days[newIdx], days[dayIdx]];
+  renderProgramEditor();
+}
+
 function editorAddSection(dayIdx) {
   editingProgram.days[dayIdx].sections.push({
     id: `sec_${Date.now()}`,
@@ -2080,6 +2092,14 @@ function editorRemoveSection(dayIdx, secIdx) {
   const sections = editingProgram.days[dayIdx].sections;
   if (sections.length <= 1) return;
   sections.splice(secIdx, 1);
+  renderProgramEditor();
+}
+
+function editorMoveSection(dayIdx, secIdx, dir) {
+  const sections = editingProgram.days[dayIdx].sections;
+  const newIdx = secIdx + dir;
+  if (newIdx < 0 || newIdx >= sections.length) return;
+  [sections[secIdx], sections[newIdx]] = [sections[newIdx], sections[secIdx]];
   renderProgramEditor();
 }
 
@@ -2737,8 +2757,10 @@ window.editorDeleteProgram = editorDeleteProgram;
 window.editorAddDay = editorAddDay;
 window.editorCopyDay = editorCopyDay;
 window.editorRemoveDay = editorRemoveDay;
+window.editorMoveDay = editorMoveDay;
 window.editorAddSection = editorAddSection;
 window.editorRemoveSection = editorRemoveSection;
+window.editorMoveSection = editorMoveSection;
 window.editorRemoveExercise = editorRemoveExercise;
 window.editorAddExercise = editorAddExercise;
 window.editSection = editSection;
